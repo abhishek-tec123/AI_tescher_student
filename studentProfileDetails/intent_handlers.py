@@ -10,7 +10,8 @@ def handle_chat_intent(
     student_agent,
     student_manager,
     payload,
-    profile
+    profile,
+    context  # session-based, user-specific context
 ):
     # -----------------------------------------
     # Update progression BEFORE response
@@ -23,18 +24,25 @@ def handle_chat_intent(
     )
 
     # -----------------------------------------
-    # Generate response (Tutor model)
+    # Prepare session history for the tutor
+    # Only include previous queries and responses
+    # -----------------------------------------
+    history_context = [f"Q: {turn['query']}\nA: {turn['response']}" for turn in context]
+
+    # -----------------------------------------
+    # Generate response (Tutor model) with session context
     # -----------------------------------------
     chat = diagnosis_chat(
         student_agent,
         payload.query,
         payload.class_name,
         payload.subject,
-        profile
+        profile,
+        context=history_context  # Pass previous conversation
     )
 
     response = chat["response"]
-    confusion_type = chat["confusion_type"]
+    confusion_type = chat.get("confusion_type")
 
     # -----------------------------------------
     # 🔍 Evaluate response (Evaluator model)
@@ -47,8 +55,8 @@ def handle_chat_intent(
         confusion_type=confusion_type
     )
 
-    quality_scores = evaluation["scores"]
-    overall_score = evaluation["overall"]
+    quality_scores = evaluation.get("scores")
+    overall_score = evaluation.get("overall")
 
     # -----------------------------------------
     # Persist updated profile
@@ -68,7 +76,7 @@ def handle_chat_intent(
     )
 
     # -----------------------------------------
-    # Store conversation + evaluation
+    # Store conversation + evaluation in persistent DB
     # -----------------------------------------
     student_manager.add_conversation(
         student_id=payload.student_id,
@@ -76,7 +84,7 @@ def handle_chat_intent(
         query=payload.query,
         response=response,
         confusion_type=confusion_type,
-        evaluation=evaluation,          # 👈 store full evaluation
+        evaluation=evaluation
     )
 
     # -----------------------------------------
@@ -99,7 +107,7 @@ def handle_chat_intent(
     )
 
     # -----------------------------------------
-    # Return response + profile + quality
+    # Return response + profile + evaluation
     # -----------------------------------------
     return {
         "response": response,
