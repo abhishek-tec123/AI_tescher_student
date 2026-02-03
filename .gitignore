@@ -1,1 +1,126 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python version files
+.python-version
+
+# =========================
+# Package managers
+# =========================
+pip-wheel-metadata/
+pip-log.txt
+poetry.lock
+Pipfile.lock
+
+# uv / rye / pdm
+.uv/
+.rye/
+.pdm-python
+
+# =========================
+# Environment variables
+# =========================
 .env
+.env.*
+!.env.example
+
+# =========================
+# Logs & runtime files
+# =========================
+*.log
+logs/
+*.pid
+
+# =========================
+# Testing & coverage
+# =========================
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.pytest_cache/
+
+# =========================
+# Build artifacts
+# =========================
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# =========================
+# Jupyter / notebooks
+# =========================
+.ipynb_checkpoints/
+
+# =========================
+# ML / AI artifacts
+# =========================
+wandb/
+mlruns/
+checkpoints/
+models/
+*.ckpt
+*.pt
+*.bin
+
+# Vector DB / local indexes
+chromadb/
+faiss_index/
+weaviate_data/
+
+# =========================
+# Caches
+# =========================
+.cache/
+.mypy_cache/
+.pyright/
+ruff_cache/
+
+# =========================
+# OS / Editor
+# =========================
+.DS_Store
+Thumbs.db
+
+.vscode/
+.idea/
+
+# =========================
+# Frontend (if React later)
+# =========================
+node_modules/
+dist/
+.build/
+.next/
+
+# =========================
+# Secrets & credentials
+# =========================
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+credentials.json
+secrets.json
+
+# =========================
+# Misc
+# =========================
+*.tmp
+*.swp
+*.bak
