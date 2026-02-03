@@ -44,17 +44,23 @@ except ImportError:
 
 try:
     from embaddings.VectorStoreInAtls import create_vector_and_store_in_atlas
-except ImportError:
+except ImportError as e:
+    # If it's a ModuleNotFoundError for something else (like docx), re-raise it
+    if isinstance(e, ModuleNotFoundError) and not e.name.endswith('VectorStoreInAtls'):
+        raise
     try:
         from embaddings.VectorStoreInAtls import create_vector_and_store_in_atlas
     except ImportError:
-        # Direct import from same directory
+        # Direct import from embaddings directory
         import importlib.util
-        vector_store_path = os.path.join(_current_dir, "VectorStoreInAtls.py")
-        spec = importlib.util.spec_from_file_location("VectorStoreInAtls", vector_store_path)
-        vector_store_module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(vector_store_module)
-        create_vector_and_store_in_atlas = vector_store_module.create_vector_and_store_in_atlas
+        vector_store_path = os.path.join(_parent_dir, "embaddings", "VectorStoreInAtls.py")
+        if os.path.exists(vector_store_path):
+            spec = importlib.util.spec_from_file_location("VectorStoreInAtls", vector_store_path)
+            vector_store_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(vector_store_module)
+            create_vector_and_store_in_atlas = vector_store_module.create_vector_and_store_in_atlas
+        else:
+            raise ImportError("Could not find VectorStoreInAtls.py")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
