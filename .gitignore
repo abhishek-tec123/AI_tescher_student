@@ -117,10 +117,3 @@ dist/
 *.pfx
 credentials.json
 secrets.json
-
-# =========================
-# Misc
-# =========================
-*.tmp
-*.swp
-*.bak
