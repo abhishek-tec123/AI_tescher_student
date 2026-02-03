@@ -3,8 +3,8 @@ from datetime import datetime
 from typing import Optional
 from bson import ObjectId
 import os
-from dotenv import load_dotenv
-load_dotenv()
+from dotenv import load_dotenv, find_dotenv
+load_dotenv(find_dotenv())
 
 MONGO_URI = os.environ.get("MONGODB_URI")
 DB_NAME = "teacher_ai"
