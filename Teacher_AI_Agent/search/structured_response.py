@@ -73,6 +73,18 @@ def generate_response_from_groq(
     system_prompt = custom_prompt or "Answer the user query concisely and accurately."
     full_input = f"{system_prompt}\n\n{profile_prompt}\n\nUser Query: {query}\n\nJSON Data:\n{input_text}"
 
+    # Log what's being sent to LLM
+    logger.info("=" * 80)
+    logger.info("📤 SENDING TO LLM:")
+    logger.info("=" * 80)
+    logger.info(f"System Prompt: {system_prompt}")
+    logger.info(f"Profile Instructions: {profile_prompt}")
+    logger.info(f"User Query: {query[:500]}{'...' if len(query) > 500 else ''}")
+    # logger.info(f"Retrieved Context (chunks): {len(input_text)} chars")
+    # logger.info("-" * 80)
+    # logger.info("Full LLM Input (first 1000 chars):")
+    # logger.info(full_input[:1000] + ("..." if len(full_input) > 1000 else ""))
+    logger.info("=" * 80)
 
     # Token count helper
     def count_tokens(text):
@@ -93,10 +105,20 @@ def generate_response_from_groq(
     )
 
     messages = [HumanMessage(content=full_input)]
+    
+    input_tokens = count_tokens(full_input)
+    logger.info(f"[Token Log] Input tokens: {input_tokens}")
+    
     response = llm.invoke(messages)
 
     response_text = getattr(response, "content", str(response))
-    logger.info(f"[Token Log] Response tokens: {count_tokens(response_text)}")
+    output_tokens = count_tokens(response_text)
+    logger.info(f"[Token Log] Output tokens: {output_tokens}")
+    logger.info("=" * 80)
+    # logger.info("📥 LLM RESPONSE:")
+    # logger.info("=" * 80)
+    logger.info(response_text[:500] + ("..." if len(response_text) > 500 else ""))
+    logger.info("=" * 80)
 
     return response_text
 

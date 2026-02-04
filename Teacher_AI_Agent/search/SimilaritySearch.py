@@ -22,7 +22,53 @@ MONGODB_URI = os.environ.get("MONGODB_URI")
 VECTOR_INDEX_NAME = "vector_index"
 
 TOP_K = 3
-MIN_SCORE_THRESHOLD = 0.40  # Minimum cosine similarity for chunks to be considered relevant
+MIN_SCORE_THRESHOLD = 0.35  # Minimum cosine similarity for chunks to be considered relevant (lowered from 0.40 to handle edge cases)
+
+# -----------------------------
+# Query extraction helper
+# -----------------------------
+def extract_core_question(query: str) -> str:
+    """
+    Extracts the core question from a formatted query string.
+    Looks for patterns like "Current Question:" or just uses the query if no pattern found.
+    """
+    import re
+    
+    # Pattern 1: "Current Question:\n<question>"
+    match = re.search(r"Current Question:\s*\n\s*(.+?)(?:\n\n|\nClass:|\nStudent preferences:|$)", query, re.DOTALL | re.IGNORECASE)
+    if match:
+        core = match.group(1).strip()
+        if core:
+            return core
+    
+    # Pattern 2: "Previous conversation:...\n\nCurrent Question:\n<question>"
+    match = re.search(r"Current Question:\s*\n\s*(.+?)(?:\n\n|\nClass:|$)", query, re.DOTALL | re.IGNORECASE)
+    if match:
+        core = match.group(1).strip()
+        if core:
+            return core
+    
+    # Pattern 3: If query starts with "Q:" or "Question:"
+    match = re.search(r"^(?:Q:|Question:)\s*(.+?)(?:\n|$)", query, re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    
+    # Fallback: use first line or first 200 chars if query is very long
+    lines = query.strip().split('\n')
+    if len(lines) > 0:
+        first_line = lines[0].strip()
+        # If first line is very short and looks like a question, use it
+        if len(first_line) < 200 and '?' in first_line:
+            return first_line
+        # Otherwise, if query is very long (>500 chars), use first meaningful line
+        if len(query) > 500:
+            for line in lines[:5]:  # Check first 5 lines
+                line = line.strip()
+                if line and len(line) < 200 and not line.startswith(('Class:', 'Subject:', 'Student', 'Rules:', 'Previous')):
+                    return line
+    
+    # Default: return query as-is (but limit length for embedding)
+    return query[:500] if len(query) > 500 else query
 
 # -----------------------------
 # Embedding helper
@@ -172,9 +218,14 @@ def retrieve_chunk_for_query_send_to_llm(
         return _err("Failed to connect to MongoDB.")
 
     # -----------------------------
-    # Generate query embedding
+    # Extract core question for embedding (better similarity scores)
+    # Use full query for LLM response generation
     # -----------------------------
-    query_embedding = embed_query(query, embedding_model)
+    core_question = extract_core_question(query)
+    logger.info(f"Core question extracted for embedding: '{core_question[:100]}...' (full query length: {len(query)})")
+    
+    # Generate query embedding using core question only
+    query_embedding = embed_query(core_question, embedding_model)
 
     # -----------------------------
     # Retrieve chunks
@@ -186,8 +237,10 @@ def retrieve_chunk_for_query_send_to_llm(
         results = find_similar_chunks_in_memory(query_embedding, collection, top_k=top_k)
 
     if not results:
-        logger.warning("No chunks retrieved from similarity search.")
-        return _err("I don’t have knowledge about this topic. You may refer to another agent.")
+        # No chunks retrieved at all (empty collection or vector search failure).
+        # We still continue and call the LLM with *no RAG context* so that
+        # it can answer from general knowledge and/or chat history.
+        logger.warning("No chunks retrieved from similarity search. Proceeding with empty context.")
 
     # -----------------------------
     # LOG ALL retrieved chunks
@@ -209,31 +262,44 @@ def retrieve_chunk_for_query_send_to_llm(
     ]
 
     if not filtered_results:
+        # If nothing passes the similarity threshold, we STILL call the LLM,
+        # but with empty RAG context. This allows answers based on prior
+        # conversation (session history in the query) or model knowledge.
         logger.warning(
             f"No chunks passed MIN_SCORE_THRESHOLD={MIN_SCORE_THRESHOLD}. "
-            "LLM will NOT be called."
+            "Continuing with empty RAG context."
         )
-        return _err("I don’t have knowledge about this topic. You may refer to another agent.")
 
     # -----------------------------
-    # LOG accepted chunks
+    # LOG accepted chunks with content
     # -----------------------------
-    logger.info("Chunks passed threshold and will be sent to LLM:")
+    logger.info("=" * 80)
+    logger.info("✅ Chunks passed threshold and will be sent to LLM:")
+    logger.info("=" * 80)
     for idx, doc in enumerate(filtered_results):
+        chunk_text = doc.get("chunk_text", "")
         logger.info(
             f"[ACCEPTED {idx + 1}] Score: {doc['score']:.4f}, "
             f"Unique ID: {doc.get('unique_id')}, "
             f"Chunk ID: {doc.get('unique_chunk_id')}"
         )
+        logger.info(f"Chunk {idx + 1} Content ({len(chunk_text)} chars):")
+        logger.info(chunk_text[:300] + ("..." if len(chunk_text) > 300 else ""))
+        logger.info("-" * 80)
 
     # -----------------------------
     # Build combined result string
     # -----------------------------
     result_string = "\n---\n".join(doc["chunk_text"] for doc in filtered_results)
+    logger.info(f"Combined context string length: {len(result_string)} chars")
+    logger.info("=" * 80)
 
     # -----------------------------
     # Call LLM function
     # -----------------------------
+    logger.info(f"Calling LLM with query: '{query[:200]}{'...' if len(query) > 200 else ''}'")
+    logger.info(f"Context chunks: {len(filtered_results)} chunks, {len(result_string)} total chars")
+    
     response_text = get_llm_response_from_chunk(
         result_string=result_string,
         query=query,
