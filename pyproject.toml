@@ -24,6 +24,7 @@ dependencies = [
     "pandas>=2.3.3",
     "pymongo>=4.16.0",
     "pymupdf>=1.26.7",
+    "python-multipart>=0.0.22",
     "sentence-transformers>=5.2.0",
     "spacy>=3.8.11",
     "streamlit>=1.53.1",

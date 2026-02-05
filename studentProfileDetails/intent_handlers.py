@@ -1,9 +1,9 @@
-from learning_progress import normalize_student_preference, update_progress_and_regression
-from concept_diagnosis_agent import diagnosis_chat
-from quiz_generator import generate_quiz_from_history
-from studyPlane import generate_study_plan_with_subtopics
+from studentProfileDetails.learning_progress import normalize_student_preference, update_progress_and_regression
+from studentProfileDetails.agents.mainAgent import diagnosis_chat
+from studentProfileDetails.agents.quiz_generator import generate_quiz_from_history
+from studentProfileDetails.agents.studyPlane import generate_study_plan_with_subtopics
 
-from evaluation_agent import evaluate_response
+from studentProfileDetails.agents.evaluation_agent import evaluate_response
 
 def handle_chat_intent(
     *,
