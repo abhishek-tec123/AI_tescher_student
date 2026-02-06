@@ -1,182 +1,330 @@
+# import streamlit as st
+# import requests
+
+# API_BASE = "http://localhost:8000"
+
+# CHAT_ENDPOINT = f"{API_BASE}/student/intent-based-agent"
+# FEEDBACK_ENDPOINT = f"{API_BASE}/student/feedback"
+
+# st.set_page_config(page_title="Student Assistant", page_icon="🎓")
+# st.title("🎓 Student Assistant Chat")
+
+# # -----------------------------
+# # Session State Initialization
+# # -----------------------------
+# if "messages" not in st.session_state:
+#     st.session_state.messages = []
+
+# # -----------------------------
+# # Sidebar Inputs
+# # -----------------------------
+# with st.sidebar:
+#     st.header("Student Context")
+
+#     student_id = st.text_input("Student ID", value="student_123")
+#     subject = st.text_input("Subject", value="Math")
+#     class_name = st.text_input("Class", value="10-A")
+
+# # -----------------------------
+# # Render Chat History
+# # -----------------------------
+# for i, msg in enumerate(st.session_state.messages):
+#     with st.chat_message(msg["role"]):
+#         st.markdown(msg["content"])
+
+#         # Feedback UI for each assistant response
+#         if msg["role"] == "assistant":
+#             conversation_id = msg.get("conversation_id")
+
+#             if conversation_id:
+#                 feedback_key = f"feedback_{conversation_id}"
+
+#                 # Track submitted feedback
+#                 if feedback_key not in st.session_state:
+#                     st.session_state[feedback_key] = None
+
+#                 col1, col2 = st.columns(2)
+
+#                 with col1:
+#                     if st.button(
+#                         "👍 Like",
+#                         key=f"like_{conversation_id}",
+#                         disabled=st.session_state[feedback_key] is not None
+#                     ):
+#                         requests.post(
+#                             FEEDBACK_ENDPOINT,
+#                             json={
+#                                 "conversation_id": conversation_id,
+#                                 "feedback": "like"
+#                             }
+#                         )
+#                         st.session_state[feedback_key] = "like"
+#                         st.success("Feedback recorded")
+
+#                 with col2:
+#                     if st.button(
+#                         "👎 Dislike",
+#                         key=f"dislike_{conversation_id}",
+#                         disabled=st.session_state[feedback_key] is not None
+#                     ):
+#                         requests.post(
+#                             FEEDBACK_ENDPOINT,
+#                             json={
+#                                 "conversation_id": conversation_id,
+#                                 "feedback": "dislike"
+#                             }
+#                         )
+#                         st.session_state[feedback_key] = "dislike"
+#                         st.success("Feedback recorded")
+
+#                 # Show selected feedback
+#                 if st.session_state[feedback_key]:
+#                     st.caption(f"Your feedback: **{st.session_state[feedback_key]}**")
+
+# # -----------------------------
+# # Chat Input
+# # -----------------------------
+# user_input = st.chat_input("Ask your question...")
+
+# if user_input:
+#     # User message
+#     st.session_state.messages.append({
+#         "role": "user",
+#         "content": user_input
+#     })
+
+#     with st.chat_message("user"):
+#         st.markdown(user_input)
+
+#     payload = {
+#         "student_id": student_id,
+#         "subject": subject,
+#         "class_name": class_name,
+#         "query": user_input
+#     }
+
+#     with st.chat_message("assistant"):
+#         with st.spinner("Thinking..."):
+#             response = requests.post(CHAT_ENDPOINT, json=payload)
+
+#             if response.status_code == 200:
+#                 data = response.json()
+
+#                 answer = data.get("response", "No response received.")
+#                 conversation_id = data.get("conversation_id")
+
+#                 st.markdown(answer)
+
+#                 # Save assistant message WITH conversation_id
+#                 st.session_state.messages.append({
+#                     "role": "assistant",
+#                     "content": answer,
+#                     "conversation_id": conversation_id
+#                 })
+#             else:
+#                 st.error("Failed to get response from server.")
+
+
+# with log---------------------------------------------------------------
+
 import streamlit as st
 import requests
-import hashlib
+import json
+import os
+
+API_BASE = "http://localhost:8000"
+
+CHAT_ENDPOINT = f"{API_BASE}/student/intent-based-agent"
+FEEDBACK_ENDPOINT = f"{API_BASE}/student/feedback"
+
+LOG_FILE = "log.json"
+
+st.set_page_config(page_title="Student Assistant", page_icon="🎓")
+st.title("🎓 Student Assistant Chat")
 
 # -----------------------------
-# API endpoints
+# Helper: Log interactions
 # -----------------------------
-API_CHAT = "http://localhost:8000/student/intent-based-agent"
-API_FEEDBACK = "http://localhost:8000/student/feedback"
+def log_interaction(conversation_id, student_id, subject, class_name, query, response, feedback=None):
+    """Append or update interaction in log.json"""
+    entry = {
+        "conversation_id": conversation_id,
+        "student_id": student_id,
+        "subject": subject,
+        "class_name": class_name,
+        "query": query,
+        "response": response,
+        "feedback": feedback
+    }
+
+    # Load existing logs
+    if os.path.exists(LOG_FILE):
+        with open(LOG_FILE, "r+", encoding="utf-8") as f:
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError:
+                data = []
+
+            # Check if this conversation_id exists
+            updated = False
+            for item in data:
+                if item["conversation_id"] == conversation_id:
+                    # Update feedback if provided
+                    if feedback is not None:
+                        item["feedback"] = feedback
+                    updated = True
+                    break
+
+            if not updated:
+                data.append(entry)
+
+            f.seek(0)
+            f.truncate()
+            json.dump(data, f, indent=2)
+    else:
+        with open(LOG_FILE, "w", encoding="utf-8") as f:
+            json.dump([entry], f, indent=2)
 
 # -----------------------------
-# Page config
-# -----------------------------
-st.set_page_config(page_title="Student Learning Chat", page_icon="💬", layout="wide")
-st.title("💬 Student Learning Chatbot")
-
-# -----------------------------
-# Session state initialization
+# Session State Initialization
 # -----------------------------
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-if "student_info" not in st.session_state:
-    st.session_state.student_info = {
-        "student_id": "student_001",
-        "class_name": "10th",
-        "subject": "Science"
-    }
-
-if "feedbacks" not in st.session_state:
-    st.session_state.feedbacks = {}  # message_idx -> feedback
-
-if "render_counter" not in st.session_state:
-    st.session_state.render_counter = 0  # for unique button keys
-
 # -----------------------------
-# Sidebar for student info
+# Sidebar Inputs
 # -----------------------------
 with st.sidebar:
-    st.header("Student Info")
-    st.session_state.student_info["student_id"] = st.text_input(
-        "Student ID", st.session_state.student_info["student_id"]
-    )
-    st.session_state.student_info["class_name"] = st.text_input(
-        "Class Name", st.session_state.student_info["class_name"]
-    )
-    st.session_state.student_info["subject"] = st.text_input(
-        "Subject", st.session_state.student_info["subject"]
-    )
+    st.header("Student Context")
+    student_id = st.text_input("Student ID", value="student_123")
+    subject = st.text_input("Subject", value="Math")
+    class_name = st.text_input("Class", value="10-A")
 
 # -----------------------------
-# Feedback function
+# Render Chat History
 # -----------------------------
-def send_feedback(msg_idx, fb_type):
-    # Save feedback in session state immediately
-    st.session_state.feedbacks[msg_idx] = fb_type
+for i, msg in enumerate(st.session_state.messages):
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
-    # Get previous user query
-    user_query = ""
-    for prev_idx in range(msg_idx - 1, -1, -1):
-        if st.session_state.messages[prev_idx]["role"] == "user":
-            user_query = st.session_state.messages[prev_idx]["content"]
-            break
+        # Feedback buttons for assistant messages
+        if msg["role"] == "assistant":
+            conversation_id = msg.get("conversation_id")
 
-    bot_msg = st.session_state.messages[msg_idx]["content"]
+            if conversation_id:
+                feedback_key = f"feedback_{conversation_id}"
 
-    # Send to backend API
+                if feedback_key not in st.session_state:
+                    st.session_state[feedback_key] = msg.get("feedback", None)
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button(
+                        "👍 Like",
+                        key=f"like_{conversation_id}",
+                        disabled=st.session_state[feedback_key] is not None
+                    ):
+                        requests.post(
+                            FEEDBACK_ENDPOINT,
+                            json={
+                                "conversation_id": conversation_id,
+                                "feedback": "like"
+                            }
+                        )
+                        st.session_state[feedback_key] = "like"
+                        st.success("Feedback recorded")
+                        # Update log with feedback
+                        log_interaction(
+                            conversation_id,
+                            student_id,
+                            subject,
+                            class_name,
+                            msg.get("query", ""),  # store query if available
+                            msg["content"],
+                            feedback="like"
+                        )
+
+                with col2:
+                    if st.button(
+                        "👎 Dislike",
+                        key=f"dislike_{conversation_id}",
+                        disabled=st.session_state[feedback_key] is not None
+                    ):
+                        requests.post(
+                            FEEDBACK_ENDPOINT,
+                            json={
+                                "conversation_id": conversation_id,
+                                "feedback": "dislike"
+                            }
+                        )
+                        st.session_state[feedback_key] = "dislike"
+                        st.success("Feedback recorded")
+                        # Update log with feedback
+                        log_interaction(
+                            conversation_id,
+                            student_id,
+                            subject,
+                            class_name,
+                            msg.get("query", ""),
+                            msg["content"],
+                            feedback="dislike"
+                        )
+
+                # Show selected feedback
+                if st.session_state[feedback_key]:
+                    st.caption(f"Your feedback: **{st.session_state[feedback_key]}**")
+
+# -----------------------------
+# Chat Input
+# -----------------------------
+user_input = st.chat_input("Ask your question...")
+
+if user_input:
+    # Add user message
+    st.session_state.messages.append({
+        "role": "user",
+        "content": user_input
+    })
+
+    with st.chat_message("user"):
+        st.markdown(user_input)
+
+    # Call backend
     payload = {
-        "student_id": st.session_state.student_info["student_id"],
-        "subject": st.session_state.student_info["subject"],
-        "query": user_query,
-        "response": bot_msg,
-        "feedback": fb_type,
-        "comment": None
+        "student_id": student_id,
+        "subject": subject,
+        "class_name": class_name,
+        "query": user_input
     }
 
-    try:
-        res = requests.post(API_FEEDBACK, json=payload)
-        res.raise_for_status()
-        st.success(f"Feedback '{fb_type}' saved ✅")
-    except requests.exceptions.RequestException as e:
-        st.error(f"Failed to send feedback: {e}")
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking..."):
+            response = requests.post(CHAT_ENDPOINT, json=payload)
 
-# -----------------------------
-# Container for chat messages
-# -----------------------------
-chat_container = st.container()
+            if response.status_code == 200:
+                data = response.json()
+                answer = data.get("response", "No response received.")
+                conversation_id = data.get("conversation_id")
 
-# -----------------------------
-# Display chat messages
-# -----------------------------
-def display_messages():
-    with chat_container:
-        for idx, msg in enumerate(st.session_state.messages):
-            msg_hash = hashlib.md5(msg['content'].encode()).hexdigest()[:8]
+                st.markdown(answer)
 
-            if msg["role"] == "user":
-                col1, col2 = st.columns([3, 1])
-                with col2:
-                    st.markdown(
-                        f"<div style='background-color:#1E1E1E; color:white; padding:10px; "
-                        f"border-radius:15px; text-align:right; margin-bottom:5px;'>{msg['content']}</div>",
-                        unsafe_allow_html=True
-                    )
-            else:  # Bot message
-                col1, col2 = st.columns([1, 3])
-                with col1:
-                    st.markdown(
-                        f"<div style='background-color:#1E1E1E; color:white; padding:10px; "
-                        f"border-radius:15px; text-align:left; margin-bottom:5px;'>{msg['content']}</div>",
-                        unsafe_allow_html=True
-                    )
+                # Save assistant message WITH conversation_id
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": answer,
+                    "conversation_id": conversation_id,
+                    "query": user_input,  # keep query for logging
+                    "feedback": None
+                })
 
-                    # Feedback buttons: like 👍 and dislike 👎 only
-                    fcol1, fcol2 = st.columns(2)
-                    for i, (fcol, fb_type, emoji) in enumerate(zip(
-                        [fcol1, fcol2],
-                        ["like", "dislike"],
-                        ["👍", "👎"]
-                    )):
-                        # Unique key including render counter
-                        button_key = f"{fb_type}_{idx}_{i}_{msg_hash}_{msg['role']}_{st.session_state.render_counter}"
-
-                        # Highlight selected feedback in green
-                        if st.session_state.feedbacks.get(idx) == fb_type:
-                            st.markdown(
-                                f"<span style='background-color:green; color:white; padding:5px 10px; border-radius:10px;'>{emoji}</span>",
-                                unsafe_allow_html=True
-                            )
-                        else:
-                            if fcol.button(emoji, key=button_key, help=f"Give {fb_type} feedback"):
-                                send_feedback(idx, fb_type)
-
-                    # Default to neutral if no feedback exists
-                    if idx not in st.session_state.feedbacks:
-                        st.session_state.feedbacks[idx] = "neutral"
-
-    # Increment render counter for next render to avoid duplicate keys
-    st.session_state.render_counter += 1
-
-# -----------------------------
-# Display existing messages
-# -----------------------------
-display_messages()
-st.markdown("<hr>")
-
-# -----------------------------
-# Input form for sending messages
-# -----------------------------
-with st.form("chat_form", clear_on_submit=True):
-    cols = st.columns([8, 1])
-    query = cols[0].text_input("Type your message here...", key="chat_input")
-    send = cols[1].form_submit_button("Send")
-
-    if send and query:
-        payload = {
-            "student_id": st.session_state.student_info["student_id"],
-            "class_name": st.session_state.student_info["class_name"],
-            "subject": st.session_state.student_info["subject"],
-            "query": query
-        }
-
-        try:
-            response = requests.post(API_CHAT, json=payload)
-            response.raise_for_status()
-            data = response.json()
-            bot_response = data.get("response", "No response from agent.")
-
-            # Save messages
-            user_idx = len(st.session_state.messages)
-            st.session_state.messages.append({"role": "user", "content": query})
-            bot_idx = len(st.session_state.messages)
-            st.session_state.messages.append({"role": "bot", "content": bot_response})
-
-            # Default feedback for new bot message is neutral
-            st.session_state.feedbacks[bot_idx] = "neutral"
-
-            # Redisplay messages
-            display_messages()
-
-        except requests.exceptions.RequestException as e:
-            st.error(f"Error communicating with API: {e}")
+                # Log the interaction
+                log_interaction(
+                    conversation_id,
+                    student_id,
+                    subject,
+                    class_name,
+                    user_input,
+                    answer
+                )
+            else:
+                st.error("Failed to get response from server.")

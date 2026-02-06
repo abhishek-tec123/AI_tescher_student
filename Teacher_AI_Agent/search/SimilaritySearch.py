@@ -1,4 +1,3 @@
-# similarity_search.py
 # -----------------------------
 # Student-adaptive similarity search + Groq LLM
 # -----------------------------
@@ -238,9 +237,19 @@ def retrieve_chunk_for_query_send_to_llm(
 
     if not results:
         # No chunks retrieved at all (empty collection or vector search failure).
-        # We still continue and call the LLM with *no RAG context* so that
-        # it can answer from general knowledge and/or chat history.
-        logger.warning("No chunks retrieved from similarity search. Proceeding with empty context.")
+        # Do NOT fall back to LLM without RAG context – return a safe message.
+        logger.warning("No chunks retrieved from similarity search. Not calling LLM without context.")
+        safe_msg = (
+            "I’m not able to answer this question from the available learning materials. "
+            "Please try rephrasing your question or ask your teacher for help."
+        )
+        quality_scores = compute_quality_scores(
+            query=query,
+            response_text=safe_msg,
+            retrieved_chunks=[],
+            context_string="",
+        )
+        return {"response": safe_msg, "quality_scores": quality_scores}
 
     # -----------------------------
     # LOG ALL retrieved chunks
@@ -262,13 +271,23 @@ def retrieve_chunk_for_query_send_to_llm(
     ]
 
     if not filtered_results:
-        # If nothing passes the similarity threshold, we STILL call the LLM,
-        # but with empty RAG context. This allows answers based on prior
-        # conversation (session history in the query) or model knowledge.
+        # If nothing passes the similarity threshold, do NOT call the LLM.
+        # This avoids answers that rely purely on model prior knowledge.
         logger.warning(
             f"No chunks passed MIN_SCORE_THRESHOLD={MIN_SCORE_THRESHOLD}. "
-            "Continuing with empty RAG context."
+            "Not calling LLM without RAG context."
         )
+        safe_msg = (
+            "I’m not able to find relevant content in the learning materials for this question. "
+            "Please try asking it in a different way or consult your teacher."
+        )
+        quality_scores = compute_quality_scores(
+            query=query,
+            response_text=safe_msg,
+            retrieved_chunks=[],
+            context_string="",
+        )
+        return {"response": safe_msg, "quality_scores": quality_scores}
 
     # -----------------------------
     # LOG accepted chunks with content
@@ -283,21 +302,20 @@ def retrieve_chunk_for_query_send_to_llm(
             f"Unique ID: {doc.get('unique_id')}, "
             f"Chunk ID: {doc.get('unique_chunk_id')}"
         )
-        logger.info(f"Chunk {idx + 1} Content ({len(chunk_text)} chars):")
-        logger.info(chunk_text[:300] + ("..." if len(chunk_text) > 300 else ""))
-        logger.info("-" * 80)
+        # logger.info(f"Chunk {idx + 1} Content ({len(chunk_text)} chars):")
+        # logger.info(chunk_text[:300] + ("..." if len(chunk_text) > 300 else ""))
+        # logger.info("-" * 80)
 
     # -----------------------------
     # Build combined result string
     # -----------------------------
     result_string = "\n---\n".join(doc["chunk_text"] for doc in filtered_results)
     logger.info(f"Combined context string length: {len(result_string)} chars")
-    logger.info("=" * 80)
 
     # -----------------------------
     # Call LLM function
     # -----------------------------
-    logger.info(f"Calling LLM with query: '{query[:200]}{'...' if len(query) > 200 else ''}'")
+    # logger.info(f"Calling LLM with query: {query}")
     logger.info(f"Context chunks: {len(filtered_results)} chunks, {len(result_string)} total chars")
     
     response_text = get_llm_response_from_chunk(
