@@ -176,30 +176,51 @@ class StudentManager:
     # ---------------------------
     # Update Feedback
     # ---------------------------
-    def update_feedback(self, student_id: str, subject: str, feedback: str, conversation_id: Optional[str] = None) -> int:
-        if feedback not in {"like", "dislike", "neutral"}:
-            return 0
+    from bson import ObjectId
+    def find_conversation_subject(self, conversation_id: ObjectId) -> str | None:
+        doc = self.students.find_one(
+            {
+                "$or": [
+                    {f"conversation_history.{subject}._id": conversation_id}
+                    for subject in ["Science", "Math"]  # or dynamic list
+                ]
+            },
+            {"conversation_history": 1}
+        )
 
-        if conversation_id is None:
-            doc = self.students.find_one(
-                {"_id": student_id},
-                {f"metadata.last_conversation_id.{subject}": 1}
-            )
-            if not doc:
-                return 0
-            conversation_id = doc.get("metadata", {}).get("last_conversation_id", {}).get(subject)
-            if not conversation_id:
-                return 0
+        if not doc:
+            return None
+
+        for subject, conversations in doc.get("conversation_history", {}).items():
+            for c in conversations:
+                if c["_id"] == conversation_id:
+                    return subject
+
+        return None
+
+    def update_feedback_by_conversation_id(
+        self,
+        conversation_id: str,
+        feedback: str
+    ) -> int:
+
+        conversation_id = ObjectId(conversation_id)
+
+        subject = self.find_conversation_subject(conversation_id)
+        if not subject:
+            return 0
 
         result = self.students.update_one(
             {
-                "_id": student_id,
-                f"conversation_history.{subject}._id": ObjectId(conversation_id)
+                f"conversation_history.{subject}._id": conversation_id
             },
             {
-                "$set": {f"conversation_history.{subject}.$.feedback": feedback}
+                "$set": {
+                    f"conversation_history.{subject}.$.feedback": feedback
+                }
             }
         )
+
         return result.modified_count
 
     # ---------------------------
@@ -274,6 +295,7 @@ class StudentManager:
             for h in history
         ]
 
+# -----------------------------------------------------------------------------------------------
     def summarize_and_store_conversation(
         self,
         student_id: str,

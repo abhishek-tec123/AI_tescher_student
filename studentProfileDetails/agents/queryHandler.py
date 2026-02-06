@@ -6,6 +6,8 @@ from studentProfileDetails.agents.mainAgent import detect_intent_and_topic
 from studentProfileDetails.agents.quiz_generator import generate_quiz_from_history
 from studentProfileDetails.agents.notes_agent import generate_notes
 
+conversation_id = None
+
 def queryRouter(
     *,
     payload,
@@ -47,6 +49,7 @@ def queryRouter(
     intent_result = detect_intent_and_topic(payload.query)
     intent = intent_result["intent"]
     topic = intent_result.get("topic")
+    query = intent_result.get("query")
 
     response = None
     evaluation = None
@@ -62,6 +65,7 @@ def queryRouter(
         response = result["response"]
         profile = result["profile"]
         evaluation = result["evaluation"]
+        conversation_id = result.get("conversation_id")
 
         session_context.append({
             "query": payload.query,
@@ -115,10 +119,12 @@ def queryRouter(
 
     return JSONResponse(
         content={
+            "query": query,
             "intent": intent,
             "response": response,
             "profile": profile,
             "quality_scores": evaluation,
+            "conversation_id": conversation_id,
             "context_history": context_store[payload.student_id]
         }
     )

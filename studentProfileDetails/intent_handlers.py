@@ -76,9 +76,9 @@ def handle_chat_intent(
     )
 
     # -----------------------------------------
-    # Store conversation + evaluation in persistent DB
+    # Store conversation + evaluation in persistent DB and return last conversation id
     # -----------------------------------------
-    student_manager.add_conversation(
+    conversation_id = student_manager.add_conversation(
         student_id=payload.student_id,
         subject=payload.subject,
         query=payload.query,
@@ -112,7 +112,8 @@ def handle_chat_intent(
     return {
         "response": response,
         "profile": profile,
-        "evaluation": evaluation
+        "evaluation": evaluation,
+        "conversation_id": str(conversation_id)
     }
 
 

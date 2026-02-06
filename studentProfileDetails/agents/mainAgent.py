@@ -249,7 +249,7 @@ def detect_intent_and_topic(query: str) -> dict:
             "topic": extract_topic_from_sentence(query)
         }
 
-    return {"intent": "CHAT", "topic": None}
+    return {"intent": "CHAT", "query": q, "topic": None}
 
 
 # =====================================================

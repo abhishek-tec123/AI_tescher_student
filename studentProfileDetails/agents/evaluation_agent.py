@@ -19,22 +19,26 @@ if not GROQ_API_KEY:
 evaluator_llm = ChatGroq(
     model_name="llama-3.1-8b-instant",
     api_key=GROQ_API_KEY,
-    temperature=0.0,          # critical for judging
+    temperature=0.1,   # 🔴 CRITICAL: judging must be cold
     max_tokens=400,
 )
 
 # --------------------------------------------------
-# Evaluation Prompt Template
+# Evaluation Prompt Template (STRICT)
 # --------------------------------------------------
 EVALUATION_PROMPT = """
-You are an educational response evaluator.
+You are a STRICT educational response evaluator.
 
 IMPORTANT:
 - You did NOT generate the assistant response.
-- Be fair and calibrated, not overly harsh.
-- Do NOT give a score of 0.0 unless the response is clearly wrong or misleading.
+- You are an external reviewer.
+- Do NOT default to mid-range scores.
+- Use the FULL score range when justified.
+- Penalize mismatches with the student profile.
+- If the response is TOO BASIC for an ADVANCED student,
+  personalization MUST be BELOW 0.4.
+- Be fair, but do not be lenient.
 
-Evaluate the assistant's response using the rubric below.
 Return ONLY valid JSON. No extra text.
 
 --------------------------------------------------
@@ -43,22 +47,22 @@ SCORING GUIDELINES (0.0 – 1.0)
 
 clarity:
 - Is the explanation easy to follow and well-structured?
-- Does it avoid unnecessary ambiguity?
+- Is it concise and aligned with desired response length?
 
 correctness:
-- Is the response factually correct for the subject?
-- A simplified explanation is STILL correct if it is not misleading.
-- Do NOT penalize correctness for being basic or brief.
-- Only give a low score if facts are wrong or misleading.
+- Is the response factually correct?
+- Simplified explanations are OK IF NOT misleading.
 
 personalization:
-- Does the response respect the student's profile (level, tone, learning style)?
-- Penalize if the response ignores advanced level, step-by-step style, or length constraints.
+- Does the response match the student's level, tone,
+  learning style, and length constraints?
+- Penalize generic or beginner-level explanations
+  given to advanced students.
 
 pedagogical_value:
-- Does the response help the student learn?
-- Consider explanations, scaffolding, examples, or conceptual framing.
-- A short but clear explanation can still score moderately well.
+- Does the response meaningfully help learning?
+- Does it provide insight, structure, or conceptual clarity?
+- Generic encouragement without substance should score LOW.
 
 --------------------------------------------------
 CONTEXT
@@ -87,7 +91,7 @@ Assistant Response:
 OUTPUT FORMAT (STRICT)
 --------------------------------------------------
 
-Return JSON in EXACT format:
+Return JSON EXACTLY in this format:
 
 {{
   "scores": {{
@@ -102,8 +106,8 @@ Return JSON in EXACT format:
 
 Rules:
 - Overall score MUST be the average of the four scores
-- Use decimals like 0.65 or 0.80
-- Do not add any text outside the JSON
+- Use decimals like 0.35, 0.60, 0.85
+- Do NOT add any text outside the JSON
 """
 
 # --------------------------------------------------
@@ -128,8 +132,8 @@ def evaluate_response(
         learning_style=profile.get("learning_style", "unknown"),
         include_example=profile.get("include_example", False),
         tone=profile.get("tone", "neutral"),
+        response_length=profile.get("response_length", "unspecified"),
         confusion_type=confusion_type or "None",
-        response_length=profile.get("response_length"),
         response=response,
     )
 
@@ -143,11 +147,12 @@ def evaluate_response(
 
         # ---- Safety validation ----
         scores = evaluation.get("scores", {})
-        if len(scores) != 4:
+        if not isinstance(scores, dict) or len(scores) != 4:
             raise ValueError("Invalid score structure")
 
+        # Recompute overall to enforce rule
         evaluation["overall"] = round(
-            sum(scores.values()) / len(scores), 2
+            sum(float(v) for v in scores.values()) / 4, 2
         )
 
         return evaluation
@@ -158,9 +163,9 @@ def evaluate_response(
             "scores": {
                 "clarity": 0.5,
                 "correctness": 0.5,
-                "personalization": 0.5,
-                "pedagogical_value": 0.5,
+                "personalization": 0.3,
+                "pedagogical_value": 0.4,
             },
-            "overall": 0.5,
-            "feedback": f"Evaluation failed, fallback used ({str(e)})"
+            "overall": 0.43,
+            "feedback": f"Evaluation failed; fallback used ({str(e)})"
         }
