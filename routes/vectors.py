@@ -1,5 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, Form, Request
-from typing import List
+from typing import List, Optional
 import os
 
 from Teacher_AI_Agent.dbFun.createVector import create_vectors_service
@@ -55,7 +55,8 @@ async def create_vectors(
     description: str | None = Form(None),
     teaching_tone: str | None = Form(None),
 
-    files: List[UploadFile] = File(...),
+    files: Optional[List[UploadFile]] = File(None)
+
 ):
     agent_metadata = {
         "agent_type": agent_type,
