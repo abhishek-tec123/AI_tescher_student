@@ -1,7 +1,4 @@
-import os, sys
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-from fastapi import FastAPI
+from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 
 from routes.startup import startup_event
@@ -24,22 +21,23 @@ async def on_startup():
     await startup_event(app)
 
 # -------------------------------------------------
-# Routers
+# API v1 Router
 # -------------------------------------------------
-app.include_router(
-    student.router,
-    prefix="/student",
-    tags=["Student"]
-    )
+api_v1_router = APIRouter(prefix="/api/v1")
 
-app.include_router(
+api_v1_router.include_router(
+    student.router, 
+    prefix="/student", 
+    tags=["Student"])
+
+api_v1_router.include_router(
     admin.router, 
     prefix="/admin", 
-    tags=["Admin"]
-    )
+    tags=["Admin"])
 
-app.include_router(
+api_v1_router.include_router(
     vectors.router, 
     prefix="/vectors", 
-    tags=["Vectors"]
-    )
+    tags=["Vectors"])
+
+app.include_router(api_v1_router)

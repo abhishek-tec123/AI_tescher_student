@@ -13,7 +13,7 @@ router = APIRouter()
 
 context_store: dict[str, list[dict[str, str]]] = {}
 
-@router.post("/intent-based-agent")
+@router.post("/agent-query")
 def ask(payload: AskRequest, request: Request):
     return queryRouter(
         payload=payload,
