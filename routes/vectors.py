@@ -49,14 +49,32 @@ async def create_vectors(
     request: Request,
     class_: str = Form(...),
     subject: str = Form(...),
+
+    agent_type: str | None = Form(None),
+    agent_name: str | None = Form(None),
+    description: str | None = Form(None),
+    teaching_tone: str | None = Form(None),
+
     files: List[UploadFile] = File(...),
 ):
+    agent_metadata = {
+        "agent_type": agent_type,
+        "agent_name": agent_name,
+        "description": description,
+        "teaching_tone": teaching_tone,
+    }
+
+    # remove None values
+    agent_metadata = {k: v for k, v in agent_metadata.items() if v is not None}
+
     return await create_vectors_service(
         class_=class_,
         subject=subject,
         files=files,
         embedding_model=request.app.state.embedding_model,
+        agent_metadata=agent_metadata or None
     )
+
 
 @router.post("/search")
 def search(payload: SearchRequest, request: Request):

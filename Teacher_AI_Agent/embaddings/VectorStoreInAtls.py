@@ -23,20 +23,32 @@ load_dotenv()
 # ----------------------------
 def insert_chunks_to_db(embedding_json, collection):
     operations = []
+
     for entry in embedding_json:
+        # ✅ FIX: unique_chunk_id is nested
+        unique_chunk_id = entry["chunk"]["unique_chunk_id"]
+
         operations.append(
             UpdateOne(
-                {"unique_chunk_id": entry["unique_chunk_id"]},
+                {"chunk.unique_chunk_id": unique_chunk_id},
                 {"$setOnInsert": entry},
                 upsert=True
             )
         )
+
     if not operations:
         return 0
+
     result = collection.bulk_write(operations, ordered=False)
     inserted_count = result.upserted_count
-    logger.info(f"Bulk upserted {len(operations)} chunks. Inserted new: {inserted_count}, matched existing: {result.matched_count}")
+
+    logger.info(
+        f"Bulk upserted {len(operations)} chunks. "
+        f"Inserted new: {inserted_count}, matched existing: {result.matched_count}"
+    )
+
     return inserted_count
+
 
 def get_mongo_collection(db_name: str = None, collection_name: str = None):
     """Return a MongoDB collection object using provided or environment values."""
@@ -48,51 +60,77 @@ def get_mongo_collection(db_name: str = None, collection_name: str = None):
     collection_name = collection_name or os.environ.get("COLLECTION_NAME")
 
     if not db_name or not collection_name:
-        raise ValueError("DB name and Collection name must be provided either as arguments or in environment variables.")
+        raise ValueError(
+            "DB name and Collection name must be provided either as arguments or in environment variables."
+        )
 
     client = MongoClient(MONGODB_URI)
     logger.info(f"Connected to MongoDB: {db_name}.{collection_name}")
     return client[db_name][collection_name], collection_name
 
+
 # ----------------------------
 # Main Processing Function
 # ----------------------------
 def create_vector_and_store_in_atlas(
-    file_inputs: List[str],
-    db_name: str = None,
-    collection_name: str = None,
-    embedding_model=None,
-    original_filenames: List[str] = None  # ✅ Add this
+    file_inputs,
+    db_name,
+    collection_name,
+    embedding_model,
+    original_filenames,
+    agent_metadata: dict | None = None
 ):
     if embedding_model is None:
         raise ValueError("No embedding model provided. This function requires a pre-loaded embedding model.")
-    
-    embedding_model_name = getattr(embedding_model, 'model_name', 'provided_model')
+
+    embedding_model_name = getattr(embedding_model, "model_name", "provided_model")
 
     logger.info("Generating vectors and extracting metadata from files...")
-    vector, doc_ids = get_vectors_and_details(file_inputs, embedding_model=embedding_model, original_filenames=original_filenames)
+    vector, doc_ids = get_vectors_and_details(
+        file_inputs,
+        embedding_model=embedding_model,
+        original_filenames=original_filenames
+    )
+
     logger.info(f"Generated embeddings for {len(vector)} chunks")
+
+    # ✅ Attach agent metadata safely
+    if agent_metadata:
+        logger.info(f"Attaching agent metadata: {agent_metadata}")
+        for entry in vector:
+            entry["agent_metadata"] = agent_metadata
 
     collection, used_collection_name = get_mongo_collection(db_name, collection_name)
 
-    logger.info("Inserting new chunks into MongoDB...")
+    logger.info("Inserting chunks into MongoDB...")
     inserted_count = insert_chunks_to_db(vector, collection)
-    logger.info(f"✅ Inserted {inserted_count} new chunks into MongoDB collection '{used_collection_name}'.")
 
-    # Build summary
-    unique_file_names = list({e["file_name"] for e in vector})
+    logger.info(
+        f"✅ Inserted {inserted_count} new chunks into MongoDB collection '{used_collection_name}'."
+    )
+
+    # ✅ FIX: file_name is nested under document
+    unique_file_names = list({
+        e["document"]["file_name"]
+        for e in vector
+        if e.get("document") and e["document"].get("file_name")
+    })
+
     summary = {
         "num_chunks": len(vector),
         "inserted_chunks": inserted_count,
         "file_names": unique_file_names,
         "embedding_model": embedding_model_name,
-        "all_unique_ids": doc_ids,
-        "original_filenames": original_filenames  # ✅ Add to summary if needed
+        "doc_unique_ids": doc_ids,
+        "original_filenames": original_filenames,
+        "agent_metadata": agent_metadata
     }
 
     logger.info("Summary of operation:")
     logger.info(json.dumps(summary, indent=2, ensure_ascii=False))
+
     return summary
+
 
 # ----------------------------
 # Example usage (uncomment to run directly)

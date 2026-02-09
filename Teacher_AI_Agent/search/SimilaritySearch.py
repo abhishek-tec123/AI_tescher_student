@@ -19,6 +19,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 # -----------------------------
 MONGODB_URI = os.environ.get("MONGODB_URI")
 VECTOR_INDEX_NAME = "vector_index"
+# In the current schema, the embedding vector is stored under `embedding.vector`
+VECTOR_PATH = "embedding.vector"
 
 TOP_K = 3
 MIN_SCORE_THRESHOLD = 0.35  # Minimum cosine similarity for chunks to be considered relevant (lowered from 0.40 to handle edge cases)
@@ -86,7 +88,8 @@ def find_similar_chunks(query_embedding, collection, num_candidates=100, limit=T
             {
                 "$vectorSearch": {
                     "index": index_name,
-                    "path": "embedding",
+                    # Match the stored schema: embedding vector is nested
+                    "path": VECTOR_PATH,
                     "queryVector": query_embedding,
                     "numCandidates": num_candidates,
                     "limit": limit
@@ -94,10 +97,11 @@ def find_similar_chunks(query_embedding, collection, num_candidates=100, limit=T
             },
             {
                 "$project": {
-                    "chunk_text": 1,
+                    # Normalize fields into a flat structure expected downstream
+                    "chunk_text": "$chunk.text",
                     "score": {"$meta": "vectorSearchScore"},
-                    "unique_id": 1,
-                    "unique_chunk_id": 1
+                    "unique_id": "$document.doc_unique_id",
+                    "unique_chunk_id": "$chunk.unique_chunk_id"
                 }
             }
         ]
@@ -108,22 +112,49 @@ def find_similar_chunks(query_embedding, collection, num_candidates=100, limit=T
 
 def find_similar_chunks_in_memory(query_embedding, collection, top_k=TOP_K):
     """Fallback in-memory cosine similarity search."""
-    docs = list(collection.find({}, {"embedding": 1, "chunk_text": 1, "unique_id": 1, "unique_chunk_id": 1}))
+    # Match the current nested schema used when storing documents
+    docs = list(
+        collection.find(
+            {},
+            {
+                "embedding.vector": 1,
+                "chunk.text": 1,
+                "chunk.unique_chunk_id": 1,
+                "document.doc_unique_id": 1,
+            },
+        )
+    )
 
     def cosine_similarity(a, b):
         a = np.array(a)
         b = np.array(b)
         return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
-    scored = [
-        {
-            "unique_id": doc["unique_id"],
-            "unique_chunk_id": doc.get("unique_chunk_id", "N/A"),
-            "chunk_text": doc["chunk_text"],
-            "score": cosine_similarity(query_embedding, doc["embedding"])
-        }
-        for doc in docs if "embedding" in doc
-    ]
+    scored = []
+    for doc in docs:
+        # Safely extract nested fields according to the current schema
+        embedding_container = doc.get("embedding") or {}
+        embedding_vector = embedding_container.get("vector")
+        if embedding_vector is None:
+            # Skip documents without an embedding vector
+            continue
+
+        chunk_container = doc.get("chunk") or {}
+        document_container = doc.get("document") or {}
+
+        unique_id = document_container.get("doc_unique_id")
+        unique_chunk_id = chunk_container.get("unique_chunk_id", "N/A")
+        chunk_text = chunk_container.get("text", "")
+
+        scored.append(
+            {
+                # Normalize into the flat structure expected downstream
+                "unique_id": unique_id,
+                "unique_chunk_id": unique_chunk_id,
+                "chunk_text": chunk_text,
+                "score": cosine_similarity(query_embedding, embedding_vector),
+            }
+        )
 
     scored.sort(key=lambda x: x["score"], reverse=True)
     return scored[:top_k]

@@ -37,7 +37,7 @@ def generate_custom_id(file_name, length=5):
     hash_digest = hashlib.sha256(file_name.encode('utf-8')).hexdigest()
     return hash_digest[:length]
 
-def build_embedding_json_for_db(chunks: List[Document], embeddings: List[List[float]], embedding_model_name: str, original_filenames: List[str] = None):
+def build_embedding_json_for_db(chunks: List[Document], embeddings: List[List[float]], embedding_model_name: str, original_filenames: List[str] = None, agent_metadata: dict | None = None,):
     result = []
     unique_ids = set()
     
@@ -74,27 +74,40 @@ def build_embedding_json_for_db(chunks: List[Document], embeddings: List[List[fl
             file_name_to_unique_id[file_name] = generate_custom_id(file_name, 5)
     
     for idx, (chunk, emb) in enumerate(zip(chunks, embeddings)):
-        source = chunk.metadata.get("source", None)
+        source = chunk.metadata.get("source")
         file_type = os.path.splitext(source)[1] if source else None
         file_name = os.path.basename(source) if source else None
-        
-        # Use original filename if available, otherwise use temp filename
-        if file_name and file_name in temp_to_original_mapping:
+
+        if file_name in temp_to_original_mapping:
             file_name = temp_to_original_mapping[file_name]
-        
-        unique_id = file_name_to_unique_id.get(file_name, None)
+
+        unique_id = file_name_to_unique_id.get(file_name)
         unique_ids.add(unique_id)
+
         unique_chunk_id = f"{unique_id}_{idx}"
+
         entry = {
-            "file_name": file_name,
-            "file_type": file_type,
-            "unique_id": unique_id,  # Document-level unique id (5-char custom)
-            "unique_chunk_id": unique_chunk_id,  # Chunk-level unique id
-            "embedding": emb,  # Store full embedding for DB
-            "embedding_size": len(emb),
-            "chunk_text": chunk.page_content,  # Store full chunk for DB
-            "embedding_model": embedding_model_name,
-            "metadata": chunk.metadata
+            "document": {
+                "file_name": file_name,
+                "file_type": file_type,
+                "doc_unique_id": unique_id,
+            },
+            "chunk": {
+                "unique_chunk_id": unique_chunk_id,
+                "text": chunk.page_content,
+            },
+            "embedding": {
+                "model": embedding_model_name,
+                "vector": emb,
+                "size": len(emb),
+            },
+            "metadata": chunk.metadata,
         }
+
+        # ✅ Attach agent metadata ONLY if provided
+        if agent_metadata:
+            entry["agent_metadata"] = agent_metadata
+
         result.append(entry)
+
     return result, list(unique_ids)

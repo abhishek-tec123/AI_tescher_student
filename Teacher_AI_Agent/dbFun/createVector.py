@@ -11,7 +11,8 @@ async def create_vectors_service(
     class_: str,
     subject: str,
     files: List[UploadFile],
-    embedding_model
+    embedding_model,
+    agent_metadata: dict | None = None
 ):
     db_name, collection_name = map_to_db_and_collection(class_, subject)
 
@@ -31,5 +32,6 @@ async def create_vectors_service(
         db_name=db_name,
         collection_name=collection_name,
         embedding_model=embedding_model,
-        original_filenames=original_filenames
+        original_filenames=original_filenames,
+        agent_metadata=agent_metadata  # may be None
     )
