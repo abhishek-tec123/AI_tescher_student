@@ -50,7 +50,7 @@ def handle_chat_intent(
         payload.subject,
         profile,
     )
-
+    print("Student Profile : ", profile)
     # -----------------------------------------
     # Prepare academic history
     # -----------------------------------------
