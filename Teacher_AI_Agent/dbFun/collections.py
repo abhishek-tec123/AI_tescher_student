@@ -53,3 +53,56 @@ def list_all_collections():
             "status": "error",
             "message": str(e)
         }
+
+# get agent by class name-------------------------------------------------------------
+
+def get_agents_by_class(class_name):
+    try:
+        client = MongoClient(MONGODB_URI)
+        result = []
+
+        if class_name in SYSTEM_DBS or class_name not in client.list_database_names():
+            return {
+                "status": "error",
+                "message": f"Class '{class_name}' does not exist or is excluded."
+            }
+
+        db = client[class_name]
+
+        for collection_name in db.list_collection_names():
+            collection = db[collection_name]
+
+            # Only one document per collection
+            doc = collection.find_one(
+                {"agent_metadata.description": {"$exists": True}},
+                {"agent_metadata.agent_name": 1,
+                 "agent_metadata.agent_type": 1,
+                 "agent_metadata.description": 1}
+            )
+
+            if not doc:
+                continue  # skip collections with no agent
+
+            agent = doc.get("agent_metadata", {})
+            result.append({
+                "class": class_name,
+                "subject": collection_name,
+                "agent_name": agent.get("agent_name"),
+                # "agent_type": agent.get("agent_type"),
+                # "description": agent.get("description")
+            })
+
+        agent_count = len(result)
+
+        return {
+            "status": "success",
+            "agent_count": agent_count,
+            "agents": result
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Error fetching agents for class {class_name}: {e}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }

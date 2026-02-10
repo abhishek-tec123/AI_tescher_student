@@ -1,5 +1,6 @@
 from fastapi import APIRouter, UploadFile, File, Form, Request
 from typing import List, Optional
+from fastapi.responses import JSONResponse
 import os
 
 from Teacher_AI_Agent.dbFun.createVector import create_vectors_service
@@ -9,7 +10,7 @@ from Teacher_AI_Agent.dbFun.classes_and_subject import (
     list_all_classes,
     get_subjects_by_class,
 )
-from Teacher_AI_Agent.dbFun.collections import list_all_collections
+from Teacher_AI_Agent.dbFun.collections import list_all_collections, get_agents_by_class
 from pydantic import BaseModel
 
 router = APIRouter()
@@ -101,3 +102,11 @@ def subjects(selected_class: str):
 @router.get("/all_collections")
 def collections():
     return list_all_collections()
+
+class ClassRequest(BaseModel):
+    class_name: str
+
+@router.post("/agent_of_class")
+def agent(request: ClassRequest):
+    data = get_agents_by_class(request.class_name)
+    return JSONResponse(content=data)
