@@ -124,8 +124,12 @@ class StudentManager:
         return merged
 
     # ---------------------------
-    # Add Conversation
+    # Add Conversation with quality score
     # ---------------------------
+    from bson import ObjectId
+    from datetime import datetime
+    from typing import Optional, Dict
+
     def add_conversation(
         self,
         student_id: str,
@@ -134,7 +138,8 @@ class StudentManager:
         response: str,
         feedback: str = "neutral",
         confusion_type: str = "NO_CONFUSION",
-        evaluation: dict = None
+        evaluation: Optional[Dict] = None,
+        quality_scores: Optional[Dict] = None   # ✅ NEW (optional)
     ) -> ObjectId:
 
         if feedback not in {"like", "dislike", "neutral"}:
@@ -143,24 +148,31 @@ class StudentManager:
         conversation_id = ObjectId()
         timestamp = datetime.utcnow()
 
+        # Base conversation document
+        conversation_doc = {
+            "_id": conversation_id,
+            "query": query,
+            "response": response,
+            "feedback": feedback,
+            "confusion_type": confusion_type,
+            "timestamp": timestamp
+        }
+
+        # Optional fields
+        if evaluation is not None:
+            conversation_doc["evaluation"] = evaluation
+
+        if quality_scores is not None:
+            conversation_doc["quality_scores"] = quality_scores
+
         self.students.update_one(
             {"_id": student_id},
             {
                 "$push": {
                     f"conversation_history.{subject}": {
-                        "$each": [
-                            {
-                                "_id": conversation_id,
-                                "query": query,
-                                "response": response,
-                                "feedback": feedback,
-                                "confusion_type": confusion_type,
-                                "evaluation": evaluation,
-                                "timestamp": timestamp
-                            }
-                        ],
+                        "$each": [conversation_doc],
                         "$sort": {"timestamp": -1},
-                        "$slice": 10   # ✅ KEEP ONLY LAST 10
+                        "$slice": 10   # keep last 10
                     }
                 },
                 "$set": {
@@ -172,6 +184,7 @@ class StudentManager:
         )
 
         return conversation_id
+
 
     # ---------------------------
     # Update Feedback
