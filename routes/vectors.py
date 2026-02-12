@@ -112,7 +112,7 @@ def agent(request: ClassRequest):
 # -------------------------------------------------
 # Get Agent by Subject Agent ID and update agent data
 # -------------------------------------------------
-from Teacher_AI_Agent.dbFun.update_vectors import update_agent_data
+from Teacher_AI_Agent.dbFun.update_vectors import update_agent_data, delete_agent_data
 from Teacher_AI_Agent.dbFun.get_agent_data import get_agent_data
 
 @router.get("/{subject_agent_id}")
@@ -143,3 +143,15 @@ async def update_agent(
         embedding_model=request.app.state.embedding_model,
         create_vectors_service=request.app.state.create_vectors_service
     )
+
+@router.delete("/{subject_agent_id}")
+async def delete_agent(subject_agent_id: str):
+    result = await delete_agent_data(subject_agent_id)
+
+    if not result["deleted"]:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    return {
+        "message": f"Agent {subject_agent_id} deleted successfully.",
+        "deleted_chunks": result["deleted_chunks"]
+    }

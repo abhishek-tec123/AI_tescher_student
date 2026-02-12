@@ -3,8 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from routes.startup import startup_event
 from routes import vectors, admin, student
-
+from Teacher_AI_Agent.dbFun.createVector import create_vectors_service
 app = FastAPI(title="Student Learning API")
+
+app.state.create_vectors_service = create_vectors_service
 
 app.add_middleware(
     CORSMiddleware,

@@ -16,7 +16,7 @@ def queryRouter(
     context_store
 ):
     # Ensure student exists
-    if not student_manager.students.find_one({"_id": payload.student_id}):
+    if not student_manager.students.find_one({"student_id": payload.student_id}):
         return JSONResponse(
             status_code=404,
             content={"error": "Student not found. Please create student first."}
@@ -70,6 +70,7 @@ def queryRouter(
         conversation_id = result.get("conversation_id")
 
         session_context.append({
+            "conversation_id": str(conversation_id) if conversation_id else None,
             "query": payload.query,
             "response": response
         })
@@ -121,12 +122,9 @@ def queryRouter(
 
     return JSONResponse(
         content={
-            "query": query,
-            "intent": intent,
+            "query": payload.query,
             "response": response,
-            "profile": profile,
-            "quality_scores": evaluation,
-            "conversation_id": conversation_id,
+            "conversation_id": str(conversation_id) if conversation_id else None,
             "context_history": context_store[payload.student_id]
         }
     )
