@@ -101,7 +101,7 @@ class StudentManager:
 
 
     def get_student(self, student_id: str):
-        return self.students.find_one({"_id": student_id})
+        return self.students.find_one({"student_id": student_id})
 
     def update_student(self, student_id: str, payload):
         update_data = {}
@@ -131,7 +131,7 @@ class StudentManager:
         return result
     
     def delete_student(self, student_id: str):
-        result = self.students.delete_one({"_id": student_id})
+        result = self.students.delete_one({"student_id": student_id})
         return result
 
     # ---------------------------
@@ -297,7 +297,8 @@ class StudentManager:
         students = self.students.find(
             {},
             {
-                "_id": 1,
+                "_id": 0,  # Exclude MongoDB _id
+                "student_id": 1,  # Include custom student_id
                 "student_details.name": 1,
                 "student_details.email": 1,
                 "student_details.class": 1,
@@ -313,7 +314,7 @@ class StudentManager:
             subject_agent = details.get("subject_agent", None)
 
             result.append({
-                "student_id": str(student.get("_id")),
+                "student_id": student.get("student_id"),
                 "name": details.get("name"),
                 "email": details.get("email"),
                 "class": details.get("class"),
