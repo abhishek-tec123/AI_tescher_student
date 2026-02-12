@@ -80,7 +80,7 @@ def get_student(
         raise HTTPException(status_code=404, detail="Student not found")
 
     return {
-        "id": student["_id"],
+        "id": str(student["_id"]),
         "name": student["student_details"]["name"],
         "email": student["student_details"]["email"],
         "class_name": student["student_details"]["class"],

@@ -313,7 +313,7 @@ class StudentManager:
             subject_agent = details.get("subject_agent", None)
 
             result.append({
-                "student_id": student.get("_id"),
+                "student_id": str(student.get("_id")),
                 "name": details.get("name"),
                 "email": details.get("email"),
                 "class": details.get("class"),
