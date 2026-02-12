@@ -26,7 +26,8 @@ def list_all_collections():
                     {"agent_metadata.description": {"$exists": True}},
                     {"agent_metadata.agent_name": 1,
                      "agent_metadata.agent_type": 1,
-                     "agent_metadata.description": 1}
+                     "agent_metadata.description": 1,
+                     "subject_agent_id": 1}
                 )
 
                 if not doc:
@@ -39,7 +40,8 @@ def list_all_collections():
                     "subject": collection_name,
                     "agent_name": agent.get("agent_name"),
                     "agent_type": agent.get("agent_type"),
-                    "description": agent.get("description")
+                    "description": agent.get("description"),
+                    "subject_agent_id": doc.get("subject_agent_id")
                 })
 
         return {

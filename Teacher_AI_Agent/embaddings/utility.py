@@ -17,6 +17,12 @@ def embed_chunks(chunks: List[Document], embedding_model) -> List[List[float]]:
     texts = [chunk.page_content for chunk in chunks]
     return embedding_model.embed_documents(texts)
 
+import random
+import string
+
+def generate_subject_agent_id():
+    random_part = ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
+    return f"agent_{random_part}"
 
 # def build_embedding_json(chunks: List[Document], embeddings: List[List[float]]) -> List[dict]:
 #     result = []
@@ -37,7 +43,7 @@ def generate_custom_id(file_name, length=5):
     hash_digest = hashlib.sha256(file_name.encode('utf-8')).hexdigest()
     return hash_digest[:length]
 
-def build_embedding_json_for_db(chunks: List[Document], embeddings: List[List[float]], embedding_model_name: str, original_filenames: List[str] = None, agent_metadata: dict | None = None,):
+def build_embedding_json_for_db(chunks: List[Document], embeddings: List[List[float]], embedding_model_name: str, original_filenames: List[str] = None, agent_metadata: dict | None = None, subject_agent_id: str = None):
     result = []
     unique_ids = set()
     
@@ -87,6 +93,7 @@ def build_embedding_json_for_db(chunks: List[Document], embeddings: List[List[fl
         unique_chunk_id = f"{unique_id}_{idx}"
 
         entry = {
+            "subject_agent_id": subject_agent_id,
             "document": {
                 "file_name": file_name,
                 "file_type": file_type,

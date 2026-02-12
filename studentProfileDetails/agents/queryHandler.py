@@ -16,9 +16,11 @@ def queryRouter(
     context_store
 ):
     # Ensure student exists
-    student_manager.create_student(
-        payload.student_id, {"class": payload.class_name}
-    )
+    if not student_manager.students.find_one({"_id": payload.student_id}):
+        return JSONResponse(
+            status_code=404,
+            content={"error": "Student not found. Please create student first."}
+        )
 
     # Initialize context
     if payload.student_id not in context_store:

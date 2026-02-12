@@ -69,6 +69,12 @@ def get_mongo_collection(db_name: str = None, collection_name: str = None):
     return client[db_name][collection_name], collection_name
 
 
+import random
+import string
+
+def generate_subject_agent_id():
+    random_part = ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
+    return f"agent_{random_part}"
 # ----------------------------
 # Main Processing Function
 # ----------------------------
@@ -78,7 +84,8 @@ def create_vector_and_store_in_atlas(
     collection_name,
     embedding_model,
     original_filenames,
-    agent_metadata: dict | None = None
+    agent_metadata: dict | None = None,
+    subject_agent_id: str | None = None, 
 ):
     if embedding_model is None:
         raise ValueError("No embedding model provided. This function requires a pre-loaded embedding model.")
@@ -87,13 +94,21 @@ def create_vector_and_store_in_atlas(
 
     logger.info("Generating vectors and extracting metadata from files...")
     vector, doc_ids = get_vectors_and_details(
-        file_inputs,
+        file_inputs=file_inputs,
         embedding_model=embedding_model,
-        original_filenames=original_filenames
+        original_filenames=original_filenames,
+        subject_agent_id=subject_agent_id,  # ✅ pass down
+        agent_metadata=agent_metadata,
     )
 
     logger.info(f"Generated embeddings for {len(vector)} chunks")
 
+    # ✅ Generate one subject_agent_id for this upload
+    subject_agent_id = generate_subject_agent_id()
+    logger.info(f"Generated subject_agent_id: {subject_agent_id}")
+
+    for entry in vector:
+        entry["subject_agent_id"] = subject_agent_id
     # ✅ Attach agent metadata safely
     if agent_metadata:
         logger.info(f"Attaching agent metadata: {agent_metadata}")
@@ -117,13 +132,15 @@ def create_vector_and_store_in_atlas(
     })
 
     summary = {
+        "subject_agent_id": subject_agent_id,
         "num_chunks": len(vector),
         "inserted_chunks": inserted_count,
         "file_names": unique_file_names,
         "embedding_model": embedding_model_name,
         "doc_unique_ids": doc_ids,
         "original_filenames": original_filenames,
-        "agent_metadata": agent_metadata
+        "agent_metadata": agent_metadata,
+        "vector_unique_ids": [c["chunk"]["unique_chunk_id"] for c in vector],
     }
 
     logger.info("Summary of operation:")

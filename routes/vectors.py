@@ -1,7 +1,8 @@
-from fastapi import APIRouter, UploadFile, File, Form, Request
+from fastapi import APIRouter, UploadFile, File, Form, Request, HTTPException
 from typing import List, Optional
 from fastapi.responses import JSONResponse
 import os
+from pymongo import MongoClient
 
 from Teacher_AI_Agent.dbFun.createVector import create_vectors_service
 from Teacher_AI_Agent.dbFun.searchChunk import search_and_generate
@@ -22,7 +23,6 @@ class SearchRequest(BaseModel):
 # -------------------------------------------------
 # Health / Env / DB Meta
 # -------------------------------------------------
-
 @router.get("/status")
 def health():
     return {"status": "ok"}
@@ -44,7 +44,6 @@ def db_status(class_: str, subject: str):
 # -------------------------------------------------
 # Vector Creation & Search
 # -------------------------------------------------
-
 @router.post("/create_vectors")
 async def create_vectors(
     request: Request,
@@ -90,7 +89,6 @@ def search(payload: SearchRequest, request: Request):
 # -------------------------------------------------
 # Classes / Subjects / Collections
 # -------------------------------------------------
-
 @router.get("/classes")
 def classes():
     return list_all_classes()
@@ -110,3 +108,38 @@ class ClassRequest(BaseModel):
 def agent(request: ClassRequest):
     data = get_agents_by_class(request.class_name)
     return JSONResponse(content=data)
+
+# -------------------------------------------------
+# Get Agent by Subject Agent ID and update agent data
+# -------------------------------------------------
+from Teacher_AI_Agent.dbFun.update_vectors import update_agent_data
+from Teacher_AI_Agent.dbFun.get_agent_data import get_agent_data
+
+@router.get("/{subject_agent_id}")
+async def get_agent(subject_agent_id: str):
+    return get_agent_data(subject_agent_id)
+
+@router.put("/{subject_agent_id}")
+async def update_agent(
+    request: Request,
+    subject_agent_id: str,
+    class_: str | None = Form(None),
+    subject: str | None = Form(None),
+    agent_type: str | None = Form(None),
+    agent_name: str | None = Form(None),
+    description: str | None = Form(None),
+    teaching_tone: str | None = Form(None),
+    files: Optional[List[UploadFile]] = None,
+):
+    return await update_agent_data(
+        subject_agent_id=subject_agent_id,
+        class_=class_,
+        subject=subject,
+        agent_type=agent_type,
+        agent_name=agent_name,
+        description=description,
+        teaching_tone=teaching_tone,
+        files=files,
+        embedding_model=request.app.state.embedding_model,
+        create_vectors_service=request.app.state.create_vectors_service
+    )

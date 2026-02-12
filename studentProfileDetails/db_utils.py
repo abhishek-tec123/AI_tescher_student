@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Optional
 from bson import ObjectId
 import os
+import uuid
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -23,7 +24,19 @@ DEFAULT_SUBJECT_PREFERENCE = {
     "common_mistakes": [],
     "confusion_counter": {},
 }
+DEFAULT_CORE_MEMORY = {
+    "self_description": "",
+    "study_preferences": "",
+    "motivation_statement": "",
+    "background_context": "",
+    "current_focus_struggle": ""
+}
 
+import random
+import string
+def generate_student_id():
+    random_part = ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
+    return f"std_{random_part}"
 
 class StudentManager:
     def __init__(self):
@@ -51,13 +64,21 @@ class StudentManager:
     # ---------------------------
     # Create New Student
     # ---------------------------
-    def create_student(self, student_id: str, student_details: dict):
+    def create_student(self, name: str, email: str, class_name: str, subject_agent: dict | None = None) -> str:
+        student_id = generate_student_id()
+
         student_doc = {
             "_id": student_id,
-            "student_details": student_details,
+            "student_details": {
+                "name": name,
+                "email": email,
+                "class": class_name,
+                "subject_agent": subject_agent or {}
+            },
+            "student_core_memory": DEFAULT_CORE_MEMORY.copy(),
             "conversation_summary": {},
             "conversation_history": {},
-            "subject_preferences": {},  # each subject (Science, Math, ...) created on first use with DEFAULT_SUBJECT_PREFERENCE; keys updated from user queries
+            "subject_preferences": {},
             "metadata": {
                 "created_at": datetime.utcnow(),
                 "last_active": None,
@@ -65,14 +86,45 @@ class StudentManager:
             }
         }
 
-        try:
-            self.students.insert_one(student_doc)
-            print(f"Student '{student_id}' created with default preferences.")
-        except errors.DuplicateKeyError:
-            # Student already exists, do nothing
-            pass
+        self.students.insert_one(student_doc)
+
+        return student_id
+
+    def get_student(self, student_id: str):
+        return self.students.find_one({"_id": student_id})
+
+    def update_student(self, student_id: str, payload):
+        update_data = {}
+
+        data = payload.dict(exclude_none=True)
+
+        if "name" in data:
+            update_data["student_details.name"] = data["name"]
+
+        if "email" in data:
+            update_data["student_details.email"] = data["email"]
+
+        if "class_name" in data:
+            update_data["student_details.class"] = data["class_name"]
+
+        if "subject_agent" in data:
+            update_data["student_details.subject_agent"] = data["subject_agent"]
+
+        if not update_data:
+            return None
+
+        result = self.students.update_one(
+            {"_id": student_id},
+            {"$set": update_data}
+        )
+
+        return result
     
-        # ---------------------------
+    def delete_student(self, student_id: str):
+        result = self.students.delete_one({"_id": student_id})
+        return result
+
+    # ---------------------------
     # Update Subject Preference
     # ---------------------------
     def update_subject_preference(self, student_id: str, subject: str, updates: dict) -> int:
@@ -185,6 +237,39 @@ class StudentManager:
 
         return conversation_id
 
+    def list_students(self) -> list:
+        """
+        Returns simplified student list.
+        If subject_agent not present → return null.
+        """
+
+        students = self.students.find(
+            {},
+            {
+                "_id": 1,
+                "student_details.name": 1,
+                "student_details.email": 1,
+                "student_details.class": 1,
+                "student_details.subject_agent": 1
+            }
+        )
+
+        result = []
+
+        for student in students:
+            details = student.get("student_details", {})
+
+            subject_agent = details.get("subject_agent", None)
+
+            result.append({
+                "student_id": student.get("_id"),
+                "name": details.get("name"),
+                "email": details.get("email"),
+                "class": details.get("class"),
+                "subject_agent": subject_agent if subject_agent else None
+            })
+
+        return result
 
     # ---------------------------
     # Update Feedback
@@ -308,7 +393,7 @@ class StudentManager:
             for h in history
         ]
 
-# -----------------------------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------------------------
     def summarize_and_store_conversation(
         self,
         student_id: str,
