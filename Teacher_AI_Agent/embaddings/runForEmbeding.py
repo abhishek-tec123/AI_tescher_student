@@ -6,36 +6,44 @@ from embaddings.utility import (
     build_embedding_json_for_db
 )
 
-def get_vectors_and_details(file_inputs, embedding_model=None, original_filenames=None):
-    # 📂 Step 1: Define input source(s)
-    # file_inputs is passed as parameter now
-
-    # ⚙️ Step 2: Load documents
+def get_vectors_and_details(
+    file_inputs,
+    embedding_model=None,
+    original_filenames=None,
+    subject_agent_id: str | None = None,
+    agent_metadata: dict | None = None
+):
+    # 📂 Step 1: Load documents
     print("[*] Loading documents...")
     docs = load_documents(file_inputs)
 
-    # 📏 Step 3: Split documents into manageable chunks
+    # 📏 Step 2: Split documents
     print(f"[*] Splitting {len(docs)} documents into chunks...")
     chunks = split_documents(docs, chunk_size=1000, chunk_overlap=200)
 
-    # 🤖 Step 4: Use provided embedding model
+    # 🤖 Step 3: Embed chunks
     if embedding_model is None:
-        raise ValueError("No embedding model provided. This function requires a pre-loaded embedding model.")
-    
+        raise ValueError("No embedding model provided.")
     model_name = getattr(embedding_model, 'model_name', 'provided_model')
 
-    # 🔢 Step 5: Embed the chunks
     print(f"[*] Embedding {len(chunks)} chunks...")
     embeddings = embed_chunks(chunks, embedding_model)
 
-    # 🧱 Step 6: Build embedding data for DB
-    print("[*] Building embedding JSON for DB...")
+    # 🧱 Step 4: Build JSON for DB
     embedding_json, doc_ids = build_embedding_json_for_db(
         chunks, embeddings, embedding_model_name=model_name, original_filenames=original_filenames
     )
 
+    # ✅ Step 5: Attach subject_agent_id and agent_metadata if provided
+    if subject_agent_id:
+        for entry in embedding_json:
+            entry["subject_agent_id"] = subject_agent_id
+    if agent_metadata:
+        for entry in embedding_json:
+            entry["agent_metadata"] = agent_metadata
+
     print(f"[✅] Processed {len(embedding_json)} embeddings from {len(doc_ids)} documents.")
-    return embedding_json,doc_ids
+    return embedding_json, doc_ids
 
 # # Example usage
 # if __name__ == "__main__":

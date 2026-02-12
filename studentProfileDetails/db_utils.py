@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Optional
 from bson import ObjectId
 import os
+import uuid
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -23,7 +24,19 @@ DEFAULT_SUBJECT_PREFERENCE = {
     "common_mistakes": [],
     "confusion_counter": {},
 }
+DEFAULT_CORE_MEMORY = {
+    "self_description": "",
+    "study_preferences": "",
+    "motivation_statement": "",
+    "background_context": "",
+    "current_focus_struggle": ""
+}
 
+import random
+import string
+def generate_student_id():
+    random_part = ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
+    return f"std_{random_part}"
 
 class StudentManager:
     def __init__(self):
@@ -51,13 +64,21 @@ class StudentManager:
     # ---------------------------
     # Create New Student
     # ---------------------------
-    def create_student(self, student_id: str, student_details: dict):
+    def create_student(self, name: str, email: str, class_name: str, subject_agent: dict | None = None) -> str:
+        student_id = generate_student_id()
+
         student_doc = {
             "_id": student_id,
-            "student_details": student_details,
+            "student_details": {
+                "name": name,
+                "email": email,
+                "class": class_name,
+                "subject_agent": subject_agent or {}
+            },
+            "student_core_memory": DEFAULT_CORE_MEMORY.copy(),
             "conversation_summary": {},
             "conversation_history": {},
-            "subject_preferences": {},  # each subject (Science, Math, ...) created on first use with DEFAULT_SUBJECT_PREFERENCE; keys updated from user queries
+            "subject_preferences": {},
             "metadata": {
                 "created_at": datetime.utcnow(),
                 "last_active": None,
@@ -65,14 +86,45 @@ class StudentManager:
             }
         }
 
-        try:
-            self.students.insert_one(student_doc)
-            print(f"Student '{student_id}' created with default preferences.")
-        except errors.DuplicateKeyError:
-            # Student already exists, do nothing
-            pass
+        self.students.insert_one(student_doc)
+
+        return student_id
+
+    def get_student(self, student_id: str):
+        return self.students.find_one({"_id": student_id})
+
+    def update_student(self, student_id: str, payload):
+        update_data = {}
+
+        data = payload.dict(exclude_none=True)
+
+        if "name" in data:
+            update_data["student_details.name"] = data["name"]
+
+        if "email" in data:
+            update_data["student_details.email"] = data["email"]
+
+        if "class_name" in data:
+            update_data["student_details.class"] = data["class_name"]
+
+        if "subject_agent" in data:
+            update_data["student_details.subject_agent"] = data["subject_agent"]
+
+        if not update_data:
+            return None
+
+        result = self.students.update_one(
+            {"_id": student_id},
+            {"$set": update_data}
+        )
+
+        return result
     
-        # ---------------------------
+    def delete_student(self, student_id: str):
+        result = self.students.delete_one({"_id": student_id})
+        return result
+
+    # ---------------------------
     # Update Subject Preference
     # ---------------------------
     def update_subject_preference(self, student_id: str, subject: str, updates: dict) -> int:
@@ -124,8 +176,12 @@ class StudentManager:
         return merged
 
     # ---------------------------
-    # Add Conversation
+    # Add Conversation with quality score
     # ---------------------------
+    from bson import ObjectId
+    from datetime import datetime
+    from typing import Optional, Dict
+
     def add_conversation(
         self,
         student_id: str,
@@ -134,7 +190,8 @@ class StudentManager:
         response: str,
         feedback: str = "neutral",
         confusion_type: str = "NO_CONFUSION",
-        evaluation: dict = None
+        evaluation: Optional[Dict] = None,
+        quality_scores: Optional[Dict] = None   # ✅ NEW (optional)
     ) -> ObjectId:
 
         if feedback not in {"like", "dislike", "neutral"}:
@@ -143,24 +200,31 @@ class StudentManager:
         conversation_id = ObjectId()
         timestamp = datetime.utcnow()
 
+        # Base conversation document
+        conversation_doc = {
+            "_id": conversation_id,
+            "query": query,
+            "response": response,
+            "feedback": feedback,
+            "confusion_type": confusion_type,
+            "timestamp": timestamp
+        }
+
+        # Optional fields
+        if evaluation is not None:
+            conversation_doc["evaluation"] = evaluation
+
+        if quality_scores is not None:
+            conversation_doc["quality_scores"] = quality_scores
+
         self.students.update_one(
             {"_id": student_id},
             {
                 "$push": {
                     f"conversation_history.{subject}": {
-                        "$each": [
-                            {
-                                "_id": conversation_id,
-                                "query": query,
-                                "response": response,
-                                "feedback": feedback,
-                                "confusion_type": confusion_type,
-                                "evaluation": evaluation,
-                                "timestamp": timestamp
-                            }
-                        ],
+                        "$each": [conversation_doc],
                         "$sort": {"timestamp": -1},
-                        "$slice": 10   # ✅ KEEP ONLY LAST 10
+                        "$slice": 10   # keep last 10
                     }
                 },
                 "$set": {
@@ -173,33 +237,88 @@ class StudentManager:
 
         return conversation_id
 
+    def list_students(self) -> list:
+        """
+        Returns simplified student list.
+        If subject_agent not present → return null.
+        """
+
+        students = self.students.find(
+            {},
+            {
+                "_id": 1,
+                "student_details.name": 1,
+                "student_details.email": 1,
+                "student_details.class": 1,
+                "student_details.subject_agent": 1
+            }
+        )
+
+        result = []
+
+        for student in students:
+            details = student.get("student_details", {})
+
+            subject_agent = details.get("subject_agent", None)
+
+            result.append({
+                "student_id": student.get("_id"),
+                "name": details.get("name"),
+                "email": details.get("email"),
+                "class": details.get("class"),
+                "subject_agent": subject_agent if subject_agent else None
+            })
+
+        return result
+
     # ---------------------------
     # Update Feedback
     # ---------------------------
-    def update_feedback(self, student_id: str, subject: str, feedback: str, conversation_id: Optional[str] = None) -> int:
-        if feedback not in {"like", "dislike", "neutral"}:
-            return 0
+    from bson import ObjectId
+    def find_conversation_subject(self, conversation_id: ObjectId) -> str | None:
+        doc = self.students.find_one(
+            {
+                "$or": [
+                    {f"conversation_history.{subject}._id": conversation_id}
+                    for subject in ["Science", "Math"]  # or dynamic list
+                ]
+            },
+            {"conversation_history": 1}
+        )
 
-        if conversation_id is None:
-            doc = self.students.find_one(
-                {"_id": student_id},
-                {f"metadata.last_conversation_id.{subject}": 1}
-            )
-            if not doc:
-                return 0
-            conversation_id = doc.get("metadata", {}).get("last_conversation_id", {}).get(subject)
-            if not conversation_id:
-                return 0
+        if not doc:
+            return None
+
+        for subject, conversations in doc.get("conversation_history", {}).items():
+            for c in conversations:
+                if c["_id"] == conversation_id:
+                    return subject
+
+        return None
+
+    def update_feedback_by_conversation_id(
+        self,
+        conversation_id: str,
+        feedback: str
+    ) -> int:
+
+        conversation_id = ObjectId(conversation_id)
+
+        subject = self.find_conversation_subject(conversation_id)
+        if not subject:
+            return 0
 
         result = self.students.update_one(
             {
-                "_id": student_id,
-                f"conversation_history.{subject}._id": ObjectId(conversation_id)
+                f"conversation_history.{subject}._id": conversation_id
             },
             {
-                "$set": {f"conversation_history.{subject}.$.feedback": feedback}
+                "$set": {
+                    f"conversation_history.{subject}.$.feedback": feedback
+                }
             }
         )
+
         return result.modified_count
 
     # ---------------------------
@@ -274,6 +393,7 @@ class StudentManager:
             for h in history
         ]
 
+    # -----------------------------------------------------------------------------------------------
     def summarize_and_store_conversation(
         self,
         student_id: str,

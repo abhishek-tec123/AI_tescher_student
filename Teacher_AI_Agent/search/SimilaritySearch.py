@@ -1,4 +1,3 @@
-# similarity_search.py
 # -----------------------------
 # Student-adaptive similarity search + Groq LLM
 # -----------------------------
@@ -20,6 +19,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 # -----------------------------
 MONGODB_URI = os.environ.get("MONGODB_URI")
 VECTOR_INDEX_NAME = "vector_index"
+# In the current schema, the embedding vector is stored under `embedding.vector`
+VECTOR_PATH = "embedding.vector"
 
 TOP_K = 3
 MIN_SCORE_THRESHOLD = 0.35  # Minimum cosine similarity for chunks to be considered relevant (lowered from 0.40 to handle edge cases)
@@ -87,7 +88,8 @@ def find_similar_chunks(query_embedding, collection, num_candidates=100, limit=T
             {
                 "$vectorSearch": {
                     "index": index_name,
-                    "path": "embedding",
+                    # Match the stored schema: embedding vector is nested
+                    "path": VECTOR_PATH,
                     "queryVector": query_embedding,
                     "numCandidates": num_candidates,
                     "limit": limit
@@ -95,10 +97,11 @@ def find_similar_chunks(query_embedding, collection, num_candidates=100, limit=T
             },
             {
                 "$project": {
-                    "chunk_text": 1,
+                    # Normalize fields into a flat structure expected downstream
+                    "chunk_text": "$chunk.text",
                     "score": {"$meta": "vectorSearchScore"},
-                    "unique_id": 1,
-                    "unique_chunk_id": 1
+                    "unique_id": "$document.doc_unique_id",
+                    "unique_chunk_id": "$chunk.unique_chunk_id"
                 }
             }
         ]
@@ -109,22 +112,49 @@ def find_similar_chunks(query_embedding, collection, num_candidates=100, limit=T
 
 def find_similar_chunks_in_memory(query_embedding, collection, top_k=TOP_K):
     """Fallback in-memory cosine similarity search."""
-    docs = list(collection.find({}, {"embedding": 1, "chunk_text": 1, "unique_id": 1, "unique_chunk_id": 1}))
+    # Match the current nested schema used when storing documents
+    docs = list(
+        collection.find(
+            {},
+            {
+                "embedding.vector": 1,
+                "chunk.text": 1,
+                "chunk.unique_chunk_id": 1,
+                "document.doc_unique_id": 1,
+            },
+        )
+    )
 
     def cosine_similarity(a, b):
         a = np.array(a)
         b = np.array(b)
         return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
-    scored = [
-        {
-            "unique_id": doc["unique_id"],
-            "unique_chunk_id": doc.get("unique_chunk_id", "N/A"),
-            "chunk_text": doc["chunk_text"],
-            "score": cosine_similarity(query_embedding, doc["embedding"])
-        }
-        for doc in docs if "embedding" in doc
-    ]
+    scored = []
+    for doc in docs:
+        # Safely extract nested fields according to the current schema
+        embedding_container = doc.get("embedding") or {}
+        embedding_vector = embedding_container.get("vector")
+        if embedding_vector is None:
+            # Skip documents without an embedding vector
+            continue
+
+        chunk_container = doc.get("chunk") or {}
+        document_container = doc.get("document") or {}
+
+        unique_id = document_container.get("doc_unique_id")
+        unique_chunk_id = chunk_container.get("unique_chunk_id", "N/A")
+        chunk_text = chunk_container.get("text", "")
+
+        scored.append(
+            {
+                # Normalize into the flat structure expected downstream
+                "unique_id": unique_id,
+                "unique_chunk_id": unique_chunk_id,
+                "chunk_text": chunk_text,
+                "score": cosine_similarity(query_embedding, embedding_vector),
+            }
+        )
 
     scored.sort(key=lambda x: x["score"], reverse=True)
     return scored[:top_k]
@@ -238,9 +268,19 @@ def retrieve_chunk_for_query_send_to_llm(
 
     if not results:
         # No chunks retrieved at all (empty collection or vector search failure).
-        # We still continue and call the LLM with *no RAG context* so that
-        # it can answer from general knowledge and/or chat history.
-        logger.warning("No chunks retrieved from similarity search. Proceeding with empty context.")
+        # Do NOT fall back to LLM without RAG context – return a safe message.
+        logger.warning("No chunks retrieved from similarity search. Not calling LLM without context.")
+        safe_msg = (
+            "I’m not able to answer this question from the available learning materials. "
+            "Please try rephrasing your question or ask your teacher for help."
+        )
+        quality_scores = compute_quality_scores(
+            query=query,
+            response_text=safe_msg,
+            retrieved_chunks=[],
+            context_string="",
+        )
+        return {"response": safe_msg, "quality_scores": quality_scores}
 
     # -----------------------------
     # LOG ALL retrieved chunks
@@ -262,13 +302,23 @@ def retrieve_chunk_for_query_send_to_llm(
     ]
 
     if not filtered_results:
-        # If nothing passes the similarity threshold, we STILL call the LLM,
-        # but with empty RAG context. This allows answers based on prior
-        # conversation (session history in the query) or model knowledge.
+        # If nothing passes the similarity threshold, do NOT call the LLM.
+        # This avoids answers that rely purely on model prior knowledge.
         logger.warning(
             f"No chunks passed MIN_SCORE_THRESHOLD={MIN_SCORE_THRESHOLD}. "
-            "Continuing with empty RAG context."
+            "Not calling LLM without RAG context."
         )
+        safe_msg = (
+            "I’m not able to find relevant content in the learning materials for this question. "
+            "Please try asking it in a different way or consult your teacher."
+        )
+        quality_scores = compute_quality_scores(
+            query=query,
+            response_text=safe_msg,
+            retrieved_chunks=[],
+            context_string="",
+        )
+        return {"response": safe_msg, "quality_scores": quality_scores}
 
     # -----------------------------
     # LOG accepted chunks with content
@@ -283,21 +333,20 @@ def retrieve_chunk_for_query_send_to_llm(
             f"Unique ID: {doc.get('unique_id')}, "
             f"Chunk ID: {doc.get('unique_chunk_id')}"
         )
-        logger.info(f"Chunk {idx + 1} Content ({len(chunk_text)} chars):")
-        logger.info(chunk_text[:300] + ("..." if len(chunk_text) > 300 else ""))
-        logger.info("-" * 80)
+        # logger.info(f"Chunk {idx + 1} Content ({len(chunk_text)} chars):")
+        # logger.info(chunk_text[:300] + ("..." if len(chunk_text) > 300 else ""))
+        # logger.info("-" * 80)
 
     # -----------------------------
     # Build combined result string
     # -----------------------------
     result_string = "\n---\n".join(doc["chunk_text"] for doc in filtered_results)
     logger.info(f"Combined context string length: {len(result_string)} chars")
-    logger.info("=" * 80)
 
     # -----------------------------
     # Call LLM function
     # -----------------------------
-    logger.info(f"Calling LLM with query: '{query[:200]}{'...' if len(query) > 200 else ''}'")
+    # logger.info(f"Calling LLM with query: {query}")
     logger.info(f"Context chunks: {len(filtered_results)} chunks, {len(result_string)} total chars")
     
     response_text = get_llm_response_from_chunk(

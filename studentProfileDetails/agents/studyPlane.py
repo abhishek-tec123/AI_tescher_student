@@ -1,4 +1,4 @@
-from summrizeStdConv import summarize_text_with_groq
+from studentProfileDetails.summrizeStdConv import summarize_text_with_groq
 
 # -----------------------------
 # Topic Extraction (LLM-based)
@@ -82,7 +82,7 @@ Student Profile:
     return response.strip()
 
 from studentAgent.student_agent import StudentAgent
-from studyPlane import extract_topic_from_sentence
+from studentProfileDetails.agents.studyPlane import extract_topic_from_sentence
 
 def plan_aware_chat(
     student_agent: StudentAgent,

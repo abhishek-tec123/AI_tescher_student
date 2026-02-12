@@ -1,0 +1,43 @@
+from fastapi import FastAPI, APIRouter
+from fastapi.middleware.cors import CORSMiddleware
+
+from routes.startup import startup_event
+from routes import vectors, admin, student
+
+app = FastAPI(title="Student Learning API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+# -------------------------------------------------
+# Startup
+# -------------------------------------------------
+@app.on_event("startup")
+async def on_startup():
+    await startup_event(app)
+
+# -------------------------------------------------
+# API v1 Router
+# -------------------------------------------------
+api_v1_router = APIRouter(prefix="/api/v1")
+
+api_v1_router.include_router(
+    student.router, 
+    prefix="/student", 
+    tags=["Student"])
+
+api_v1_router.include_router(
+    admin.router, 
+    prefix="/admin", 
+    tags=["Admin"])
+
+api_v1_router.include_router(
+    vectors.router, 
+    prefix="/vectors", 
+    tags=["Vectors"])
+
+app.include_router(api_v1_router)

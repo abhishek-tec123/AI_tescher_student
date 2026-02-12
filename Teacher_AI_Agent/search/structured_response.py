@@ -74,7 +74,6 @@ def generate_response_from_groq(
     full_input = f"{system_prompt}\n\n{profile_prompt}\n\nUser Query: {query}\n\nJSON Data:\n{input_text}"
 
     # Log what's being sent to LLM
-    logger.info("=" * 80)
     logger.info("📤 SENDING TO LLM:")
     logger.info("=" * 80)
     logger.info(f"System Prompt: {system_prompt}")
@@ -117,8 +116,8 @@ def generate_response_from_groq(
     logger.info("=" * 80)
     # logger.info("📥 LLM RESPONSE:")
     # logger.info("=" * 80)
-    logger.info(response_text[:500] + ("..." if len(response_text) > 500 else ""))
-    logger.info("=" * 80)
+    # logger.info(response_text[:500] + ("..." if len(response_text) > 500 else ""))
+    # logger.info("=" * 80)
 
     return response_text
 

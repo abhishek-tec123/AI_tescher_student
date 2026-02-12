@@ -100,12 +100,8 @@ class RetrievalOrchestratorAgent:
         if not self._loaded:
             self.load()
 
-        logger.info("=" * 80)
         logger.info(f"🔍 Processing query in {db_name}.{collection_name}")
-        logger.info("=" * 80)
-        logger.info(f"Full Query ({len(query)} chars):")
-        logger.info(query[:500] + ("..." if len(query) > 500 else ""))
-        logger.info("=" * 80)
+        # logger.info(f"Full Query ({len(query)} chars):")
 
         try:
             result = retrieve_chunk_for_query_send_to_llm(
