@@ -56,9 +56,9 @@ def list_all_collections():
             "message": str(e)
         }
 
-# get agent by class name-------------------------------------------------------------
+# get all agent by class name-------------------------------------------------------------
 
-def get_agents_by_class(class_name):
+def get_all_agents_of_class(class_name):
     try:
         client = MongoClient(MONGODB_URI)
         result = []

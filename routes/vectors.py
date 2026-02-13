@@ -11,7 +11,7 @@ from Teacher_AI_Agent.dbFun.classes_and_subject import (
     list_all_classes,
     get_subjects_by_class,
 )
-from Teacher_AI_Agent.dbFun.collections import list_all_collections, get_agents_by_class
+from Teacher_AI_Agent.dbFun.collections import list_all_collections, get_all_agents_of_class
 from pydantic import BaseModel
 
 router = APIRouter()
@@ -106,7 +106,7 @@ class ClassRequest(BaseModel):
 
 @router.post("/agent_of_class")
 def agent(request: ClassRequest):
-    data = get_agents_by_class(request.class_name)
+    data = get_all_agents_of_class(request.class_name)
     return JSONResponse(content=data)
 
 # -------------------------------------------------

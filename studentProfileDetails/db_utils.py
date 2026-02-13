@@ -1,10 +1,13 @@
 from pymongo import MongoClient, errors
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict, Any
 from bson import ObjectId
 import os
 import uuid
 from dotenv import load_dotenv
+from .auth.password_utils import get_password_hash, verify_password, generate_default_password
+from .auth.AESPasswordUtils import encrypt_password
+
 load_dotenv()
 
 MONGO_URI = os.environ.get("MONGODB_URI")
@@ -62,8 +65,145 @@ class StudentManager:
             print(f"Collection '{COLLECTION_NAME}' exists.")
 
     # ---------------------------
-    # Create New Student
+    # Create New Student with Authentication
     # ---------------------------
+    def create_student_with_auth(
+        self,
+        name: str,
+        email: str,
+        class_name: str,
+        password: Optional[str] = None,
+        subject_agent: dict | None = None
+    ) -> tuple[str, str]:
+
+        student_id = generate_student_id()
+        
+        # Generate password if not provided
+        if password is None:
+            password = generate_default_password()
+        
+        # password_hash = get_password_hash(password) #----- this is for bycrypt
+        encrypted_password = encrypt_password(password)
+
+        student_doc = {
+            # Let MongoDB auto-generate _id (ObjectId)
+            "student_id": student_id,  # <-- separate custom ID
+
+            "student_details": {
+                "name": name,
+                "email": email,
+                "class": class_name,
+                "subject_agent": subject_agent or {}
+            },
+            "student_core_memory": DEFAULT_CORE_MEMORY.copy(),
+            "conversation_summary": {},
+            "conversation_history": {},
+            "subject_preferences": {},
+            "auth": {
+                # "password_hash": password_hash,#----- this is for bycrypt
+                "password_hash": encrypted_password,#----- this is for both way hashing
+                "is_active": True,
+                "last_login": None,
+                "role": "student"
+            },
+            "metadata": {
+                "created_at": datetime.utcnow(),
+                "last_active": None,
+                "last_conversation_id": {}
+            }
+        }
+
+        self.students.insert_one(student_doc)
+
+        return student_id, password
+
+    # ---------------------------
+    # Authentication Methods
+    # ---------------------------
+    def authenticate_user(self, email: str, password: str) -> Optional[dict]:
+        student = self.students.find_one({
+            "student_details.email": email,
+            "auth.is_active": True
+        })
+
+        if not student:
+            return None
+
+        stored_value = student["auth"]["password_hash"]
+
+        from studentProfileDetails.auth.AESPasswordUtils import decrypt_password
+
+        is_valid = False
+
+        # ---- Try bcrypt first ----
+        try:
+            is_valid = verify_password(password, stored_value)
+        except Exception:
+            # Not a bcrypt hash → try AES
+            try:
+                decrypted = decrypt_password(stored_value)
+                if password == decrypted:
+                    is_valid = True
+            except Exception:
+                is_valid = False
+
+        if not is_valid:
+            return None
+
+        # Update last login
+        self.students.update_one(
+            {"student_id": student["student_id"]},
+            {"$set": {"auth.last_login": datetime.utcnow()}}
+        )
+
+        return {
+            "user_id": student["student_id"],
+            "email": student["student_details"]["email"],
+            "name": student["student_details"]["name"],
+            "class": student["student_details"]["class"],
+            "role": student["auth"]["role"],
+            "is_active": student["auth"]["is_active"]
+        }
+
+    
+    def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+        """Get user by email."""
+        student = self.students.find_one({"student_details.email": email})
+        if not student:
+            return None
+        
+        return {
+            "user_id": student["student_id"],
+            "email": student["student_details"]["email"],
+            "name": student["student_details"]["name"],
+            "role": student["auth"]["role"],
+            "is_active": student["auth"]["is_active"],
+            "last_login": student["auth"].get("last_login"),
+            "created_at": student["metadata"]["created_at"]
+        }
+    
+    # def update_password(self, student_id: str, new_password: str) -> bool: #---------------this function for on way bycrypt algo---------------
+    #     """Update user password."""
+    #     password_hash = get_password_hash(new_password)
+    #     result = self.students.update_one(
+    #         {"student_id": student_id},
+    #         {"$set": {"auth.password_hash": password_hash}}
+    #     )
+    #     return result.modified_count > 0
+    def update_password(self, student_id: str, new_password: str) -> bool: #---------------this function for on way AES algo---------------
+        encrypted_password = encrypt_password(new_password)
+        result = self.students.update_one(
+            {"student_id": student_id},
+            {"$set": {"auth.password_hash": encrypted_password}}
+        )
+        return result.modified_count > 0
+    def admin_update_std_password(self, student_id: str, encrypted_password: str) -> bool:
+        result = self.students.update_one(
+            {"student_id": student_id},
+            {"$set": {"auth.password_hash": encrypted_password}}
+        )
+        return result.modified_count > 0
+
     def create_student(
         self,
         name: str,
@@ -119,6 +259,10 @@ class StudentManager:
 
         if "subject_agent" in data:
             update_data["student_details.subject_agent"] = data["subject_agent"]
+        # Handle password update
+        if "password" in data:
+            new_password = data["password"]
+            update_data["auth.password_hash"] = encrypt_password(new_password)  # ✅ same key
 
         if not update_data:
             return None
@@ -334,47 +478,34 @@ class StudentManager:
 
         conversation_id = ObjectId(conversation_id)
 
-        # Step 1: Get all subject keys dynamically
-        doc = self.students.find_one(
+        # Get all subject keys from ALL documents (not just one)
+        sample_docs = self.students.find(
             {"conversation_history": {"$exists": True}},
             {"conversation_history": 1}
         )
 
-        if not doc:
+        subjects = set()
+
+        for doc in sample_docs:
+            subjects.update(doc.get("conversation_history", {}).keys())
+
+        if not subjects:
             return 0
 
-        subjects = list(doc.get("conversation_history", {}).keys())
-
-        # Step 2: Build dynamic OR query
-        query = {
-            "$or": [
-                {f"conversation_history.{subject}._id": conversation_id}
-                for subject in subjects
-            ]
-        }
-
-        # Step 3: Find matching document
-        doc = self.students.find_one(query)
-
-        if not doc:
-            return 0
-
-        # Step 4: Detect correct subject
         for subject in subjects:
-            for conv in doc["conversation_history"].get(subject, []):
-                if conv["_id"] == conversation_id:
-                    # Step 5: Update correct subject
-                    result = self.students.update_one(
-                        {
-                            f"conversation_history.{subject}._id": conversation_id
-                        },
-                        {
-                            "$set": {
-                                f"conversation_history.{subject}.$.feedback": feedback
-                            }
-                        }
-                    )
-                    return result.matched_count
+            result = self.students.update_one(
+                {
+                    f"conversation_history.{subject}._id": conversation_id
+                },
+                {
+                    "$set": {
+                        f"conversation_history.{subject}.$.feedback": feedback
+                    }
+                }
+            )
+
+            if result.modified_count > 0:
+                return 1
 
         return 0
 
@@ -501,6 +632,59 @@ class StudentManager:
         )
 
         return summary
+
+    # ---------------------------
+    # Get Chat History for Specific Agent (Subject)
+    # ---------------------------
+    def get_chat_history_by_agent(
+        self,
+        student_id: str,
+        subject: str,
+        limit: Optional[int] = None
+    ) -> list[Dict[str, Any]]:
+        """
+        Returns chat history for a specific student and subject(agent).
+
+        Output format:
+        [
+            {
+                "student_id": "std_XXXX",
+                "query": "...",
+                "response": "...",
+                "evaluation": {...}
+            }
+        ]
+        """
+
+        # 🔹 Fetch only required subject history
+        doc = self.students.find_one(
+            {"student_id": student_id},
+            {f"conversation_history.{subject}": 1}
+        )
+
+        if not doc:
+            return []
+
+        history = doc.get("conversation_history", {}).get(subject, [])
+
+        if not history:
+            return []
+
+        # 🔹 Apply limit if provided
+        if limit:
+            history = history[:limit]
+
+        # 🔹 Format response
+        formatted_history = []
+        for convo in history:
+            formatted_history.append({
+                "student_id": student_id,
+                "query": convo.get("query"),
+                "response": convo.get("response"),
+                "evaluation": convo.get("evaluation", {})
+            })
+
+        return formatted_history
 
     # ---------------------------
     # Close connection
