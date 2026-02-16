@@ -1,4 +1,4 @@
-import os
+import os, json
 import logging
 from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage
@@ -10,7 +10,12 @@ logger = logging.getLogger(__name__)
 
 def summarize_text_with_groq(
     text: str,
-    prompt: str = "Summarize the following text clearly and concisely."
+    prompt: str = """Summarize the following text into clear, concise bullet points.
+- Focus on key concepts
+- Keep it short
+- Avoid repetition
+- Use simple language
+"""
 ) -> str:
     """
     Summarizes the given text using Groq LLM based on the provided prompt.
@@ -43,8 +48,6 @@ TEXT:
     logger.info("Text summarized successfully")
 
     return summary
-
-import json
 
 def extract_text_from_history(history):
     """
