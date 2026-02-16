@@ -92,6 +92,16 @@ async def update_agent_data(
         if not summary:
             raise HTTPException(status_code=500, detail="Failed to create new embeddings")
 
+        # Check if summary contains vector_unique_ids (only present when files are actually processed)
+        if "vector_unique_ids" not in summary:
+            # No new vectors were created, nothing to delete
+            return {
+                "message": "Agent updated but no new documents were processed",
+                "new_chunks": 0,
+                "deleted_old_chunks": 0,
+                "subject_agent_id": subject_agent_id
+            }
+
         delete_result = found_collection.delete_many(
             {
                 "subject_agent_id": subject_agent_id,

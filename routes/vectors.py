@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, Form, Request, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, Request, HTTPException, Depends
 from typing import List, Optional
 from fastapi.responses import JSONResponse
 import os
@@ -114,6 +114,8 @@ def agent(request: ClassRequest):
 # -------------------------------------------------
 from Teacher_AI_Agent.dbFun.update_vectors import update_agent_data, delete_agent_data
 from Teacher_AI_Agent.dbFun.get_agent_data import get_agent_data
+from studentProfileDetails.db_utils import StudentManager
+from studentProfileDetails.auth.dependencies import get_current_user
 
 @router.get("/{subject_agent_id}")
 async def get_agent(subject_agent_id: str):
@@ -155,3 +157,70 @@ async def delete_agent(subject_agent_id: str):
         "message": f"Agent {subject_agent_id} deleted successfully.",
         "deleted_chunks": result["deleted_chunks"]
     }
+
+# -------------------------------------------------
+# Student Subject Management
+# -------------------------------------------------
+@router.get("/student/{student_id}/subjects")
+def get_student_subjects(
+    student_id: str,
+    student_manager: StudentManager = Depends(),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get all subjects from a student's subject_agent array.
+    Students can only access their own subjects, admins can access any student's subjects.
+    """
+    # Students can only access their own data
+    if current_user["role"] == "student" and current_user["user_id"] != student_id:
+        raise HTTPException(status_code=403, detail="Access denied: You can only access your own data")
+    
+    student = student_manager.get_student(student_id)
+    
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    
+    # Extract subjects from subject_agent array
+    subject_agent = student.get("student_details", {}).get("subject_agent", [])
+    
+    if not subject_agent:
+        return {"subjects": []}
+    
+    # Handle both array of objects and array of strings formats
+    subjects = []
+    if isinstance(subject_agent, list):
+        for item in subject_agent:
+            subject_name = ""
+            if isinstance(item, dict):
+                subject_name = item.get("subject", "")
+            elif isinstance(item, str):
+                subject_name = item
+            
+            if subject_name:
+                # Try to get description and subject_agent_id from database
+                description = ""
+                subject_agent_id = ""
+                try:
+                    from Teacher_AI_Agent.dbFun.collections import get_all_agents_of_class
+                    # Get student's class to find the right database
+                    student_class = student.get("student_details", {}).get("class", "")
+                    if student_class:
+                        agents_response = get_all_agents_of_class(student_class)
+                        if agents_response.get("status") == "success":
+                            agents = agents_response.get("agents", [])
+                            for agent in agents:
+                                if agent.get("subject") == subject_name:
+                                    description = agent.get("description", "")
+                                    subject_agent_id = agent.get("subject_agent_id", "")
+                                    break
+                except Exception:
+                    # If we can't get description, continue with empty string
+                    pass
+                
+                subjects.append({
+                    "name": subject_name,
+                    "description": description,
+                    "subject_agent_id": subject_agent_id
+                })
+    
+    return {"subjects": subjects}
