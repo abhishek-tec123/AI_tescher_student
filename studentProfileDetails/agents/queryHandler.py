@@ -5,8 +5,8 @@ from studentProfileDetails.intent_handlers import handle_chat_intent, handle_stu
 from studentProfileDetails.agents.mainAgent import detect_intent_and_topic
 from studentProfileDetails.agents.quiz_generator import generate_quiz_from_history
 from studentProfileDetails.agents.notes_agent import generate_notes
+from studentProfileDetails.summrizeStdConv import update_running_summary
 
-conversation_id = None
 
 def queryRouter(
     *,
@@ -15,6 +15,10 @@ def queryRouter(
     student_manager,
     context_store
 ):
+
+    conversation_id = None  # ✅ local variable (thread-safe)
+    context_summary = None
+
     # Ensure student exists
     if not student_manager.students.find_one({"student_id": payload.student_id}):
         return JSONResponse(
@@ -22,7 +26,7 @@ def queryRouter(
             content={"error": "Student not found. Please create student first."}
         )
 
-    # Initialize context
+    # Initialize context if not exists
     if payload.student_id not in context_store:
         context_store[payload.student_id] = []
 
@@ -51,11 +55,12 @@ def queryRouter(
     intent_result = detect_intent_and_topic(payload.query)
     intent = intent_result["intent"]
     topic = intent_result.get("topic")
-    query = intent_result.get("query")
 
     response = None
-    evaluation = None
 
+    # =============================
+    # CHAT (🔥 summary only here)
+    # =============================
     if intent == "CHAT":
         result = handle_chat_intent(
             student_agent=student_agent,
@@ -64,19 +69,32 @@ def queryRouter(
             profile=profile,
             context=session_context
         )
+
         response = result["response"]
-        profile = result["profile"]
-        evaluation = result["evaluation"]
         conversation_id = result.get("conversation_id")
 
-        session_context.append({
+        new_entry = {
             "conversation_id": str(conversation_id) if conversation_id else None,
             "query": payload.query,
             "response": response
-        })
+        }
 
+        session_context.append(new_entry)
+
+        # Keep only last 10 raw messages
         context_store[payload.student_id] = session_context[-10:]
 
+        # 🔥 Incremental summary update (CHAT only)
+        update_running_summary(
+            student_id=payload.student_id,
+            subject=payload.subject,
+            new_entry=new_entry,
+            student_manager=student_manager
+        )
+
+    # =============================
+    # QUIZ
+    # =============================
     elif intent == "QUIZ":
         quiz_data = generate_quiz_from_history(
             history=session_context,
@@ -94,6 +112,9 @@ def queryRouter(
                 "question": get_current_question(payload.student_id)
             }
 
+    # =============================
+    # STUDY PLAN
+    # =============================
     elif intent == "STUDY_PLAN":
         response = handle_study_plan_intent(
             payload=payload,
@@ -101,6 +122,9 @@ def queryRouter(
             topic=topic
         )
 
+    # =============================
+    # NOTES (🚫 no summary update)
+    # =============================
     elif intent == "NOTES":
         notes = generate_notes(
             topic=topic,
@@ -120,11 +144,24 @@ def queryRouter(
 
         context_store[payload.student_id] = session_context[-10:]
 
+    # 🔥 Fetch updated summary from MongoDB
+    student_doc = student_manager.students.find_one(
+        {"student_id": payload.student_id},
+        {"conversation_summary": 1}
+    )
+
+    if student_doc:
+        context_summary = (
+            student_doc.get("conversation_summary", {})
+            .get(payload.subject)
+        )
+
     return JSONResponse(
         content={
             "query": payload.query,
             "response": response,
             "conversation_id": str(conversation_id) if conversation_id else None,
-            "context_history": context_store[payload.student_id]
+            "context_history": context_store[payload.student_id],
+            "context_summary": context_summary
         }
     )
