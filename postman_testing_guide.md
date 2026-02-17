@@ -389,3 +389,5 @@ pm.test("Authorization header is present", function () {
 4. Check file upload restrictions (if applicable)
 
 This comprehensive guide covers all aspects of testing the authentication system in Postman, ensuring thorough validation of the role-based access control implementation.
+
+get chat history - http://127.0.0.1:8000/api/v1/student/std_F0NRQ/history/Science

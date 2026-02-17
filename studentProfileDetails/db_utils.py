@@ -353,7 +353,8 @@ class StudentManager:
         feedback: str = "neutral",
         confusion_type: str = "NO_CONFUSION",
         evaluation: Optional[Dict] = None,
-        quality_scores: Optional[Dict] = None
+        quality_scores: Optional[Dict] = None,
+        additional_data: Optional[Dict] = None
     ) -> str:
         """
         Adds a conversation entry for a student and subject.
@@ -385,6 +386,9 @@ class StudentManager:
 
         if quality_scores is not None:
             conversation_doc["quality_scores"] = quality_scores
+
+        if additional_data is not None:
+            conversation_doc.update(additional_data)
 
         # -------------------------------
         # Push conversation to history

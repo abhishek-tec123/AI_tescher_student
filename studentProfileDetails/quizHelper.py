@@ -28,7 +28,8 @@ def get_current_question(student_id: str):
         "question_number": idx + 1,
         "total_questions": len(quiz),
         "question": q["question"],
-        "options": q["options"]
+        "options": q["options"],
+        "answer": q["answer"]
     }
 
 
@@ -84,57 +85,118 @@ def get_final_quiz_result(student_id: str):
 
 from fastapi.responses import JSONResponse
 
-def handle_quiz_mode(student_id: str, query: str):
+def handle_quiz_mode(student_id: str, query: str, student_manager=None):
     """
     Handles quiz flow if the student is currently in quiz mode.
     Returns a JSONResponse if quiz mode is active, otherwise None.
     """
 
+    # Ensure consistent student_id type
+    student_id = str(student_id)
+
     # Not in quiz mode → let normal flow continue
     if student_id not in quiz_sessions:
         return None
 
+    # Normalize input
+    normalized_query = query.strip().upper()
+
     # Exit quiz
-    if query.lower() in {"exit", "quit", "stop quiz"}:
-        quiz_sessions.pop(student_id, None)
-        return JSONResponse(content={
-            "intent": "QUIZ",
-            "response": "Quiz cancelled. Back to normal chat 🙂"
-        })
+    if normalized_query in {"EXIT", "QUIT", "STOP QUIZ"}:
+        session = quiz_sessions.get(student_id)
 
-    # Submit answer
-    result = submit_quiz_answer(student_id, query)
+        if session and student_manager:
+            try:
+                student_manager.add_conversation(
+                    student_id=student_id,
+                    subject="quiz",
+                    query=query,
+                    response="Quiz cancelled by user",
+                    additional_data={"quiz_action": "cancelled"}
+                )
+            except Exception:
+                pass
 
-    if "error" in result:
-        return JSONResponse(content={
-            "intent": "QUIZ",
-            "response": "Please reply with A, B, C, or D."
-        })
-
-    # Quiz finished
-    if result["quiz_completed"]:
-        final = get_final_quiz_result(student_id)
         quiz_sessions.pop(student_id, None)
 
         return JSONResponse(content={
             "intent": "QUIZ",
             "response": {
-                "message": "🎉 Quiz Complete!",
-                "final_score": f"{final['score']} / {final['total']}"
+                "message": "Quiz cancelled. Back to normal chat 🙂"
             }
         })
 
+    # Submit answer
+    result = submit_quiz_answer(student_id, normalized_query)
+
+    if not result or "error" in result:
+        return JSONResponse(content={
+            "intent": "QUIZ",
+            "response": {
+                "message": "Please reply with A, B, C, or D."
+            }
+        })
+
+    # ----------------------------
+    # Quiz finished
+    # ----------------------------
+    if result["quiz_completed"]:
+        final = get_final_quiz_result(student_id)
+
+        # Prepare final feedback safely
+        if result["is_correct"]:
+            last_feedback = "✅ Correct!"
+        else:
+            correct = result["correct_answer"]
+            last_feedback = f"❌ Incorrect. Correct answer: {correct}"
+
+        # Record completion
+        if student_manager:
+            try:
+                student_manager.add_conversation(
+                    student_id=student_id,
+                    subject="quiz",
+                    query=query,
+                    response=f"Quiz completed! Score: {final['score']}/{final['total']}",
+                    additional_data={
+                        "quiz_action": "completed",
+                        "final_score": final["score"],
+                        "total_questions": final["total"],
+                        "answers": final["answers"]
+                    }
+                )
+            except Exception:
+                pass
+
+        # Remove session AFTER computing everything
+        quiz_sessions.pop(student_id, None)
+
+        return JSONResponse(content={
+            "intent": "QUIZ",
+            "response": {
+                # Keep structure simple to avoid frontend breaking
+                "message": (
+                    f"{last_feedback}\n\n"
+                    f"🎉 Quiz Complete!\n"
+                    f"Final Score: {final['score']} / {final['total']}"
+                )
+            }
+        })
+
+    # ----------------------------
     # Continue quiz
+    # ----------------------------
     next_question = get_current_question(student_id)
+
+    if result["is_correct"]:
+        feedback = "✅ Correct!"
+    else:
+        feedback = f"❌ Incorrect. Correct answer: {result['correct_answer']}"
 
     return JSONResponse(content={
         "intent": "QUIZ",
         "response": {
-            "feedback": (
-                "✅ Correct!"
-                if result["is_correct"]
-                else f"❌ Incorrect. Correct answer: {result['correct_answer']}"
-            ),
+            "feedback": feedback,
             "question": next_question
         }
     })

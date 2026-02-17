@@ -8,7 +8,7 @@ load_dotenv()
 
 SECRET_KEY = environ.get("JWT_SECRET_KEY", "your-secret-key-change-in-production")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = 180
 REFRESH_TOKEN_EXPIRE_DAYS = 7
 
 def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:

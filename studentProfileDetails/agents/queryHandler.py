@@ -6,6 +6,7 @@ from studentProfileDetails.agents.mainAgent import detect_intent_and_topic
 from studentProfileDetails.agents.quiz_generator import generate_quiz_from_history
 from studentProfileDetails.agents.notes_agent import generate_notes
 from studentProfileDetails.summrizeStdConv import update_running_summary
+import time
 
 
 def queryRouter(
@@ -37,7 +38,8 @@ def queryRouter(
     # -----------------------------
     quiz_response = handle_quiz_mode(
         student_id=payload.student_id,
-        query=payload.query
+        query=payload.query,
+        student_manager=student_manager
     )
 
     if quiz_response:
@@ -96,8 +98,27 @@ def queryRouter(
     # QUIZ
     # =============================
     elif intent == "QUIZ":
+        # Fetch stored conversation history from MongoDB
+        stored_history = student_manager.get_chat_history_by_agent(
+            student_id=payload.student_id,
+            subject=payload.subject,
+            limit=20  # Get more history for better quiz generation
+        )
+        
+        # Combine session context with stored history
+        # Convert stored history to the format expected by quiz generator
+        formatted_stored_history = []
+        for item in stored_history:
+            formatted_stored_history.append({
+                "query": item.get("query", ""),
+                "response": item.get("response", "")
+            })
+        
+        # Combine session context (most recent) with stored history
+        combined_history = formatted_stored_history + session_context
+        
         quiz_data = generate_quiz_from_history(
-            history=session_context,
+            history=combined_history,
             subject=payload.subject,
             topic=topic,
             num_questions=5
@@ -107,9 +128,37 @@ def queryRouter(
             response = "Sorry, I couldn't generate a quiz right now."
         else:
             create_quiz_session(payload.student_id, quiz_data)
+            
+            # Record quiz start in conversation history
+            quiz_start_entry = {
+                "query": payload.query,
+                "response": f"Started quiz about {topic or payload.subject} with {len(quiz_data['quiz'])} questions",
+                "quiz_metadata": {
+                    "topic": topic,
+                    "subject": payload.subject,
+                    "question_count": len(quiz_data["quiz"]),
+                    "quiz_id": f"quiz_{payload.student_id}_{int(time.time())}"
+                }
+            }
+            
+            # Store quiz start in conversation history
+            student_manager.add_conversation(
+                student_id=payload.student_id,
+                subject=payload.subject,
+                query=quiz_start_entry["query"],
+                response=quiz_start_entry["response"],
+                additional_data=quiz_start_entry.get("quiz_metadata", {})
+            )
+            
             response = {
                 "message": "Quiz started!",
-                "question": get_current_question(payload.student_id)
+                "question": get_current_question(payload.student_id),
+                "quiz_metadata": {
+                    "topic": topic,
+                    "subject": payload.subject,
+                    "question_count": len(quiz_data["quiz"]),
+                    "history_used": len(combined_history)
+                }
             }
 
     # =============================
@@ -126,16 +175,53 @@ def queryRouter(
     # NOTES (🚫 no summary update)
     # =============================
     elif intent == "NOTES":
+        # Fetch stored conversation history from MongoDB
+        stored_history = student_manager.get_chat_history_by_agent(
+            student_id=payload.student_id,
+            subject=payload.subject,
+            limit=20  # Get more history for better notes generation
+        )
+        
+        # Combine session context with stored history
+        # Convert stored history to the format expected by notes generator
+        formatted_stored_history = []
+        for item in stored_history:
+            formatted_stored_history.append({
+                "query": item.get("query", ""),
+                "response": item.get("response", "")
+            })
+        
+        # Combine session context (most recent) with stored history
+        combined_history = formatted_stored_history + session_context
+        
         notes = generate_notes(
             topic=topic,
-            chat_history=session_context,
+            chat_history=combined_history,
             student_profile=profile
         )
 
         response = {
             "topic": topic,
-            "notes": notes
+            "notes": notes,
+            "metadata": {
+                "history_used": len(combined_history),
+                "stored_history": len(formatted_stored_history),
+                "session_context": len(session_context)
+            }
         }
+
+        # Record notes generation in conversation history
+        student_manager.add_conversation(
+            student_id=payload.student_id,
+            subject=payload.subject,
+            query=payload.query,
+            response=f"Generated notes about {topic}",
+            additional_data={
+                "notes_action": "generated",
+                "topic": topic,
+                "history_sources": len(combined_history)
+            }
+        )
 
         session_context.append({
             "query": payload.query,
