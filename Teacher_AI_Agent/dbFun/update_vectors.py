@@ -92,6 +92,16 @@ async def update_agent_data(
         if not summary:
             raise HTTPException(status_code=500, detail="Failed to create new embeddings")
 
+        # Check if summary contains vector_unique_ids (only present when files are actually processed)
+        if "vector_unique_ids" not in summary:
+            # No new vectors were created, nothing to delete
+            return {
+                "message": "Agent updated but no new documents were processed",
+                "new_chunks": 0,
+                "deleted_old_chunks": 0,
+                "subject_agent_id": subject_agent_id
+            }
+
         delete_result = found_collection.delete_many(
             {
                 "subject_agent_id": subject_agent_id,
@@ -110,3 +120,44 @@ async def update_agent_data(
         "message": "Agent metadata updated successfully",
         "subject_agent_id": subject_agent_id
     }
+
+async def delete_vectors(subject_agent_id: str):
+    """
+    Delete all vector documents in MongoDB for a given subject_agent_id.
+    """
+    MONGODB_URI = os.environ.get("MONGODB_URI")
+    if not MONGODB_URI:
+        raise HTTPException(status_code=500, detail="MongoDB URI not configured")
+
+    client = MongoClient(MONGODB_URI)
+
+    deleted_count_total = 0
+
+    # Search all databases for the agent
+    for db_name in client.list_database_names():
+        if db_name in ["admin", "local", "config"]:
+            continue
+        db = client[db_name]
+
+        for collection_name in db.list_collection_names():
+            collection = db[collection_name]
+
+            delete_result = collection.delete_many({"subject_agent_id": subject_agent_id})
+            deleted_count_total += delete_result.deleted_count
+
+    print(f"Deleted {deleted_count_total} vector documents for agent {subject_agent_id}")
+    return {
+        "deleted": True,
+        "deleted_chunks": deleted_count_total
+    }
+
+async def delete_agent_data(subject_agent_id: str) -> dict:
+    """
+    Delete an agent and all its vectors/documents from MongoDB.
+    """
+    deleted_chunks = await delete_vectors(subject_agent_id)
+
+    if deleted_chunks == 0:
+        return {"deleted": False, "deleted_chunks": 0}
+
+    return {"deleted": True, "deleted_chunks": deleted_chunks, "subject_agent_id": subject_agent_id}

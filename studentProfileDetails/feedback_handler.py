@@ -23,19 +23,20 @@ def record_feedback(
     feedback: str,
     student_manager: StudentManager
 ) -> dict:
-    modified = student_manager.update_feedback_by_conversation_id(
+
+    matched = student_manager.update_feedback_by_conversation_id(
         conversation_id=conversation_id,
         feedback=feedback
     )
 
-    if modified == 0:
+    if matched == 0:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Conversation not found or feedback already set"
+            detail="Conversation not found"
         )
 
     return {
-        "message": "Feedback recorded",
+        "message": "Feedback updated successfully",
         "conversation_id": conversation_id,
         "feedback": feedback
     }

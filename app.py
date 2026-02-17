@@ -2,9 +2,11 @@ from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 
 from routes.startup import startup_event
-from routes import vectors, admin, student
-
+from routes import vectors, admin, student, auth
+from Teacher_AI_Agent.dbFun.createVector import create_vectors_service
 app = FastAPI(title="Student Learning API")
+
+app.state.create_vectors_service = create_vectors_service
 
 app.add_middleware(
     CORSMiddleware,
@@ -25,19 +27,32 @@ async def on_startup():
 # -------------------------------------------------
 api_v1_router = APIRouter(prefix="/api/v1")
 
+# Authentication routes (no auth required)
+api_v1_router.include_router(
+    auth.router, 
+    prefix="/auth", 
+    tags=["Authentication"]
+)
+
+# Student routes (auth required)
 api_v1_router.include_router(
     student.router, 
     prefix="/student", 
-    tags=["Student"])
+    tags=["Student"]
+)
 
+# Admin routes (auth required)
 api_v1_router.include_router(
     admin.router, 
     prefix="/admin", 
-    tags=["Admin"])
+    tags=["Admin"]
+)
 
+# Vector routes (auth required)
 api_v1_router.include_router(
     vectors.router, 
     prefix="/vectors", 
-    tags=["Vectors"])
+    tags=["Vectors"]
+)
 
 app.include_router(api_v1_router)

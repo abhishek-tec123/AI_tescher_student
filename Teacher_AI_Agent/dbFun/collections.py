@@ -56,9 +56,9 @@ def list_all_collections():
             "message": str(e)
         }
 
-# get agent by class name-------------------------------------------------------------
+# get all agent by class name-------------------------------------------------------------
 
-def get_agents_by_class(class_name):
+def get_all_agents_of_class(class_name):
     try:
         client = MongoClient(MONGODB_URI)
         result = []
@@ -79,7 +79,8 @@ def get_agents_by_class(class_name):
                 {"agent_metadata.description": {"$exists": True}},
                 {"agent_metadata.agent_name": 1,
                  "agent_metadata.agent_type": 1,
-                 "agent_metadata.description": 1}
+                 "agent_metadata.description": 1,
+                 "subject_agent_id": 1}
             )
 
             if not doc:
@@ -90,8 +91,9 @@ def get_agents_by_class(class_name):
                 "class": class_name,
                 "subject": collection_name,
                 "agent_name": agent.get("agent_name"),
-                # "agent_type": agent.get("agent_type"),
-                # "description": agent.get("description")
+                "agent_type": agent.get("agent_type"),
+                "description": agent.get("description"),
+                "subject_agent_id": doc.get("subject_agent_id")
             })
 
         agent_count = len(result)

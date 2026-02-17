@@ -103,9 +103,12 @@ def create_vector_and_store_in_atlas(
 
     logger.info(f"Generated embeddings for {len(vector)} chunks")
 
-    # ✅ Generate one subject_agent_id for this upload
-    subject_agent_id = generate_subject_agent_id()
-    logger.info(f"Generated subject_agent_id: {subject_agent_id}")
+    # ✅ FIX: Only generate for NEW agent
+    if subject_agent_id is None:
+        subject_agent_id = generate_subject_agent_id()
+        logger.info(f"Generated new subject_agent_id: {subject_agent_id}")
+    else:
+        logger.info(f"Using existing subject_agent_id: {subject_agent_id}")
 
     for entry in vector:
         entry["subject_agent_id"] = subject_agent_id
