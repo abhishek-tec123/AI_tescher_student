@@ -3,6 +3,7 @@ import json
 from threading import Lock
 from studentProfileDetails.summrizeStdConv import summarize_text_with_groq
 from studentProfileDetails.agents.studyPlane import extract_topic_from_sentence
+from studentProfileDetails.agents.rl_optimizer import RLOptimizer
 
 
 # =====================================================
@@ -289,11 +290,30 @@ def diagnosis_chat(
             personal_info_summary = "\nIMPORTANT PERSONAL INFORMATION SHARED BY STUDENT:\n" + "\n".join(personal_info) + "\n\n"
 
     # -----------------------------
-    # Build final prompt
+    # Build final prompt context
     # -----------------------------
-    # Combine personal info summary with session context
     full_context = personal_info_summary + session_history_text
+
+    # -----------------------------
+    # RL-based Query Optimization
+    # -----------------------------
+    optimizer = RLOptimizer()
+    state = optimizer.get_initial_state(query, student_profile)
+    top_k = 10
     
+    # Small RL loop to refine query/retrieval (max 2 steps for latency)
+    for _ in range(2):
+        action = optimizer.select_action(state)
+        state["previous_actions"].append(action)
+        
+        if action == "rewrite_query":
+            state["current_query"] = optimizer.rewrite_query(state["current_query"])
+        elif action == "expand_context":
+            top_k += 5
+        elif action == "generate_response":
+            break
+            
+    # Final prompt still uses session context and diagnosis
     full_prompt = build_teacher_prompt(
         student_profile=student_profile,
         class_name=class_name,
@@ -302,16 +322,17 @@ def diagnosis_chat(
         session_context=full_context
     )
 
-    full_prompt += f"\nCurrent Question:\n{query}\n"
+    full_prompt += f"\nCurrent Question:\n{state['current_query']}\n"
 
     # -----------------------------
-    # Ask LLM
+    # Ask LLM (with RL-optimized parameters)
     # -----------------------------
     result = student_agent.ask(
         query=full_prompt,
         class_name=class_name,
         subject=subject,
-        student_profile=student_profile
+        student_profile=student_profile,
+        top_k=top_k
     )
 
     if isinstance(result, dict):
@@ -321,11 +342,21 @@ def diagnosis_chat(
         response = result or ""
         quality_scores = {}
 
+    # -----------------------------
+    # Attach RL Metadata
+    # -----------------------------
+    rl_metadata = {
+        "trajectory": state["previous_actions"],
+        "optimized_query": state["current_query"],
+        "top_k": top_k
+    }
+
     return {
         "response": response,
         "confusion_type": confusion_type,
         "profile": student_profile,
-        "quality_scores": quality_scores
+        "quality_scores": quality_scores,
+        "rl_metadata": rl_metadata
     }
 
 def set_base_prompt(new_prompt: str):

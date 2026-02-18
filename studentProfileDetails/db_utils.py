@@ -492,24 +492,48 @@ class StudentManager:
 
         for doc in sample_docs:
             subjects.update(doc.get("conversation_history", {}).keys())
-
         if not subjects:
             return 0
 
         for subject in subjects:
-            result = self.students.update_one(
-                {
-                    f"conversation_history.{subject}._id": conversation_id
-                },
-                {
-                    "$set": {
-                        f"conversation_history.{subject}.$.feedback": feedback
-                    }
-                }
+            # Find the conversation to get quality_scores and rl_metadata
+            doc = self.students.find_one(
+                {f"conversation_history.{subject}._id": conversation_id},
+                {f"conversation_history.{subject}.$": 1}
             )
+            
+            if doc and doc.get("conversation_history", {}).get(subject):
+                conv = doc["conversation_history"][subject][0]
+                quality_scores = conv.get("quality_scores", {})
+                
+                # Calculate RL Reward
+                reward = 0.0
+                if feedback == "like":
+                    reward += 1.0
+                elif feedback == "dislike":
+                    reward -= 1.0
+                    
+                if quality_scores:
+                    rag_relevance = quality_scores.get("rag_relevance", 0) / 100.0
+                    completeness = quality_scores.get("answer_completeness", 0) / 100.0
+                    hallucination = quality_scores.get("hallucination_risk", 0) / 100.0
+                    reward += (rag_relevance * 0.2) + (completeness * 0.2) - (hallucination * 0.1)
+                
+                reward = round(reward, 3)
 
-            if result.modified_count > 0:
-                return 1
+                # Update feedback and reward
+                result = self.students.update_one(
+                    {f"conversation_history.{subject}._id": conversation_id},
+                    {
+                        "$set": {
+                            f"conversation_history.{subject}.$.feedback": feedback,
+                            f"conversation_history.{subject}.$.rl_metadata.reward": reward
+                        }
+                    }
+                )
+
+                if result.modified_count > 0:
+                    return 1
 
         return 0
 
@@ -617,7 +641,7 @@ class StudentManager:
         combined_text = "\n\n".join(text_blocks)
 
         # Import summarizer
-        from summrizeStdConv import summarize_text_with_groq  # ⚠️ update import path
+        from studentProfileDetails.summrizeStdConv import summarize_text_with_groq  # ✅ Fixed import path
 
         summary = summarize_text_with_groq(
             text=combined_text,

@@ -35,6 +35,20 @@ def extract_core_question(query: str) -> str:
     """
     import re
     
+    # ---------------------------------------------------------
+    # RL/Conversational Extraction (High Priority)
+    # If the query is likely a conversational response from an LLM (e.g. RL rewrite)
+    # try to extract just the core suggestion inside quotes.
+    # ---------------------------------------------------------
+    lower_query = query.lower()
+    if any(keyword in lower_query for keyword in ["rewrit", "option", "alternative", "suggested"]):
+        quoted = re.findall(r'"([^"]*)"', query)
+        if quoted:
+            # Prefer the longest quoted string if multiple exist (to avoid single words)
+            best_chunk = max(quoted, key=len)
+            if len(best_chunk) > 10: # Only if it's a meaningful phrase
+                return best_chunk[:500]
+
     # Pattern 1: "Current Question:\n<question>"
     match = re.search(r"Current Question:\s*\n\s*(.+?)(?:\n\n|\nClass:|\nStudent preferences:|$)", query, re.DOTALL | re.IGNORECASE)
     if match:
@@ -68,7 +82,6 @@ def extract_core_question(query: str) -> str:
                 if line and len(line) < 200 and not line.startswith(('Class:', 'Subject:', 'Student', 'Rules:', 'Previous')):
                     return line
     
-    # Default: return query as-is (but limit length for embedding)
     return query[:500] if len(query) > 500 else query
 
 # -----------------------------

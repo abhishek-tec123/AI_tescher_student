@@ -40,6 +40,7 @@ class StudentAgent:
         class_name: str,
         subject: str,
         student_profile: Optional[Dict] = None,
+        top_k: int = 10,
     ):
         """
         Run a query with optional student profile.
@@ -61,4 +62,5 @@ class StudentAgent:
             db_name=class_name,
             collection_name=subject,
             student_profile=student_profile,
+            top_k=top_k
         )
