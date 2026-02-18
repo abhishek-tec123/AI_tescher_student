@@ -91,6 +91,7 @@ def update_progress_and_regression(student_manager, student_id, subject, profile
     # RESPONSE_LENGTH (updated logic: quiz performance has absolute priority over confusion)
     # ------------------
     response_length = profile.get("response_length", "long")
+    degradation_include_example = False
 
     # PERFECT PERFORMANCE: Decrease response length (ABSOLUTE PRIORITY - overrides confusion)
     if consecutive_perfect_scores >= 2:
