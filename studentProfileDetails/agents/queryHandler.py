@@ -127,12 +127,18 @@ def queryRouter(
         if not quiz_data["quiz"]:
             response = "Sorry, I couldn't generate a quiz right now."
         else:
-            create_quiz_session(payload.student_id, quiz_data)
+            create_quiz_session(payload.student_id, quiz_data, payload.subject)
             
             # Record quiz start in conversation history
+            first_question = quiz_data['quiz'][0] if quiz_data['quiz'] else None
+            quiz_start_response = f"Started quiz about {topic or payload.subject} with {len(quiz_data['quiz'])} questions"
+            
+            if first_question:
+                quiz_start_response += f"\n\nQ1: {first_question['question']}\nOptions: A) {first_question['options'][0]}, B) {first_question['options'][1]}, C) {first_question['options'][2]}, D) {first_question['options'][3]}"
+            
             quiz_start_entry = {
                 "query": payload.query,
-                "response": f"Started quiz about {topic or payload.subject} with {len(quiz_data['quiz'])} questions",
+                "response": quiz_start_response,
                 "quiz_metadata": {
                     "topic": topic,
                     "subject": payload.subject,
@@ -169,6 +175,19 @@ def queryRouter(
             payload=payload,
             profile=profile,
             topic=topic
+        )
+        
+        # Store study plan generation in conversation history
+        student_manager.add_conversation(
+            student_id=payload.student_id,
+            subject=payload.subject,
+            query=payload.query,
+            response=response.get("study_plan", ""),  # Store actual study plan content
+            additional_data={
+                "study_plan_action": "generated",
+                "topic": topic,
+                "study_plan": response.get("study_plan", "")
+            }
         )
 
     # =============================
@@ -215,7 +234,7 @@ def queryRouter(
             student_id=payload.student_id,
             subject=payload.subject,
             query=payload.query,
-            response=f"Generated notes about {topic}",
+            response=notes,  # Store actual notes content
             additional_data={
                 "notes_action": "generated",
                 "topic": topic,

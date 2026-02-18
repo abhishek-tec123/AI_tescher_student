@@ -40,37 +40,69 @@ def generate_study_plan_with_subtopics(
     explicit_topic: str | None = None
 ) -> str:
     """
-    Generates a step-by-step natural language study plan.
+    Generates a structured beginner-friendly study plan
+    with clear sections, topics, and bullet points.
     """
 
     # 🔑 Decide topic source
     topic = explicit_topic.strip() if explicit_topic else extract_topic_from_sentence(student_sentence)
 
-    # Student profile hint
+    # 🧠 Student profile hint
     profile_hint = ""
     if student_profile:
+        profile_hint = "Student Profile:\n"
         for k, v in student_profile.items():
             profile_hint += f"- {k}: {v}\n"
 
     prompt = f"""
-You are a friendly and experienced school teacher.
+You are an experienced and student-friendly teacher.
 
-The student wants to learn: "{topic}"
+Create a structured step-by-step study plan for:
 
-Create a clear step-by-step study plan in plain text.
+TOPIC: {topic}
 
-STRICT RULES:
-- Assume the student is a beginner
-- First explain how the student should START
-- Then list subtopics in learning order
-- Briefly explain each subtopic
-- Do NOT jump to advanced topics early
-- Do NOT use numbering like 1., 2., 3.
-- Do NOT use markdown or bullet symbols
-- Write naturally like a teacher talking to a student
-- End by explaining what the student will be able to do after finishing
+IMPORTANT RULES:
+- Assume the student is a complete beginner
+- Organize the plan in logical learning order
+- Use clear section headings
+- Use bullet points for subtopics
+- Each subtopic must include a short explanation
+- Do NOT jump to advanced concepts early
+- Keep explanations simple and clear
 
-Student Profile:
+STRUCTURE FORMAT:
+
+Main Topic: {topic}
+
+1. Basics and Foundations
+- Subtopic
+  Short explanation
+- Subtopic
+  Short explanation
+
+2. Core Concepts
+- Subtopic
+  Short explanation
+- Subtopic
+  Short explanation
+
+3. Rules or Principles
+- Subtopic
+  Short explanation
+
+4. Practice Level
+- Beginner practice
+  What type of problems to solve
+
+5. Applications
+- Real-life use
+  How it applies in real situations
+
+6. Mastery and Review
+- Revision strategy
+  How to review
+- What the student will be able to do after completing this topic
+
 {profile_hint}
 """
 

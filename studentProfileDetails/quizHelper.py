@@ -3,14 +3,14 @@
 # -----------------------------
 quiz_sessions: dict[str, dict] = {}
 
-def create_quiz_session(student_id: str, quiz_data: dict):
+def create_quiz_session(student_id: str, quiz_data: dict, subject: str = "General"):
     quiz_sessions[student_id] = {
         "current_index": 0,
         "score": 0,
         "quiz": quiz_data["quiz"],
-        "answers": []
+        "answers": [],
+        "subject": subject
     }
-
 
 def get_current_question(student_id: str):
     session = quiz_sessions.get(student_id)
@@ -32,8 +32,7 @@ def get_current_question(student_id: str):
         "answer": q["answer"]
     }
 
-
-def submit_quiz_answer(student_id: str, user_input: str):
+def submit_quiz_answer(student_id: str, user_input: str, student_manager=None):
     session = quiz_sessions.get(student_id)
     if not session:
         return {"error": "No active quiz"}
@@ -62,6 +61,29 @@ def submit_quiz_answer(student_id: str, user_input: str):
         "correct": correct,
         "is_correct": is_correct
     })
+
+    # Store quiz question and answer in conversation history
+    if student_manager:
+        try:
+            actual_subject = session.get("subject", "General")
+            question_text = f"Q{idx + 1}: {q['question']}\nOptions: A) {q['options'][0]}, B) {q['options'][1]}, C) {q['options'][2]}, D) {q['options'][3]}"
+            answer_text = f"Your answer: {choice} ({selected})\nCorrect answer: {correct}\n{'✅ Correct!' if is_correct else '❌ Incorrect!'}"
+            
+            student_manager.add_conversation(
+                student_id=student_id,
+                subject=actual_subject,
+                query=question_text,
+                response=answer_text,
+                additional_data={
+                    "quiz_action": "question_answered",
+                    "question_number": idx + 1,
+                    "is_correct": is_correct,
+                    "selected_answer": choice,
+                    "correct_answer": correct
+                }
+            )
+        except Exception as e:
+            print(f"Failed to store quiz Q&A: {e}")
 
     session["current_index"] += 1
 
@@ -107,9 +129,10 @@ def handle_quiz_mode(student_id: str, query: str, student_manager=None):
 
         if session and student_manager:
             try:
+                actual_subject = session.get("subject", "General")
                 student_manager.add_conversation(
                     student_id=student_id,
-                    subject="quiz",
+                    subject=actual_subject,
                     query=query,
                     response="Quiz cancelled by user",
                     additional_data={"quiz_action": "cancelled"}
@@ -127,7 +150,7 @@ def handle_quiz_mode(student_id: str, query: str, student_manager=None):
         })
 
     # Submit answer
-    result = submit_quiz_answer(student_id, normalized_query)
+    result = submit_quiz_answer(student_id, normalized_query, student_manager)
 
     if not result or "error" in result:
         return JSONResponse(content={
@@ -153,9 +176,10 @@ def handle_quiz_mode(student_id: str, query: str, student_manager=None):
         # Record completion
         if student_manager:
             try:
+                actual_subject = session.get("subject", "General")
                 student_manager.add_conversation(
                     student_id=student_id,
-                    subject="quiz",
+                    subject=actual_subject,
                     query=query,
                     response=f"Quiz completed! Score: {final['score']}/{final['total']}",
                     additional_data={

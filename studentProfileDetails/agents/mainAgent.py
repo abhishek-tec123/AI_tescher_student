@@ -152,39 +152,75 @@ def build_teacher_prompt(
 
     base_prompt = get_base_prompt()
 
+    level = student_profile.get("level", "basic")
+    tone = student_profile.get("tone", "friendly")
+    learning_style = student_profile.get("learning_style", "step-by-step")
+    response_length = student_profile.get("response_length", "long")
+    include_example = student_profile.get("include_example", True)
+    common_mistakes = student_profile.get("common_mistakes", [])
+
     prompt = f"""
 {base_prompt}
 
-Class: {class_name}
-Subject: {subject}
-Detected confusion: {confusion_type}
+You are an expert and supportive school teacher.
 
-Student preferences:
-- Level: {student_profile.get("level", "basic")}
-- Tone: {student_profile.get("tone", "friendly")}
-- Learning style: {student_profile.get("learning_style", "step-by-step")}
-- Response length: {student_profile.get("response_length", "long")}
-- Include example: {student_profile.get("include_example", True)}
-- Common mistakes: {student_profile.get("common_mistakes", [])}
+CLASS: {class_name}
+SUBJECT: {subject}
+DETECTED CONFUSION: {confusion_type}
 
-Rules:
-- Follow student preferences strictly
-- Address confusion gently if present
-- Be motivating and supportive
+STUDENT PROFILE:
+- Level: {level}
+- Tone: {tone}
+- Learning style: {learning_style}
+- Response length: {response_length}
+- Include example: {include_example}
+- Common mistakes: {common_mistakes}
+
+IMPORTANT INSTRUCTIONS:
+
+1. Answer ONLY what the student asked.
+2. Do NOT introduce future or unrelated topics.
+3. Keep explanation appropriate for a {level} student.
+4. Follow tone: {tone}.
+5. If confusion exists, gently correct it.
+6. Follow learning style: {learning_style}.
+7. Provide slightly deeper conceptual clarity when appropriate.
+8. Do NOT use labels like "Subtopics:" or markdown formatting.
+9. Use clean plain text with this structure:
+
+Topic: <Main topic>
+
+- Key idea
+  Clear and slightly deep explanation
+
+- Key idea
+  Clear and slightly deep explanation
+
+10. If include_example is True, include one simple example naturally.
+11. If common mistakes are provided, include one brief correction section written as:
+   Common mistake
+   Short clarification
+
+12. End with a short encouraging sentence.
+
+Keep the response structured but natural.
+Avoid robotic formatting.
 """
 
     if session_context:
         prompt += f"\nPrevious conversation:\n{session_context}\n"
 
-    response_length = student_profile.get("response_length", "long")
-
+    # Response length control
     if response_length == "very short":
-        prompt += "\nCRITICAL: 2–4 sentences only.\n"
+        prompt += "\nCRITICAL: 3–5 sentences maximum.\n"
     elif response_length == "short":
-        prompt += "\nKeep response to one short paragraph.\n"
+        prompt += "\nKeep response concise but structured in one short explanation.\n"
+    elif response_length == "medium":
+        prompt += "\nKeep explanation moderately detailed but controlled.\n"
+    else:
+        prompt += "\nProvide detailed but focused explanation.\n"
 
     return prompt.strip()
-
 
 # =====================================================
 # 👩‍🏫 TEACHER CHAT (MAIN ENTRY)

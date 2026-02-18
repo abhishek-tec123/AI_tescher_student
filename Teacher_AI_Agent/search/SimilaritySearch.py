@@ -22,7 +22,7 @@ VECTOR_INDEX_NAME = "vector_index"
 # In the current schema, the embedding vector is stored under `embedding.vector`
 VECTOR_PATH = "embedding.vector"
 
-TOP_K = 3
+TOP_K = 10
 MIN_SCORE_THRESHOLD = 0.35  # Minimum cosine similarity for chunks to be considered relevant (lowered from 0.40 to handle edge cases)
 
 # -----------------------------
