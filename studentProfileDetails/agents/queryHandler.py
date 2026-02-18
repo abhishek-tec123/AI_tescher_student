@@ -148,13 +148,13 @@ def queryRouter(
             }
             
             # Store quiz start in conversation history
-            student_manager.add_conversation(
-                student_id=payload.student_id,
-                subject=payload.subject,
-                query=quiz_start_entry["query"],
-                response=quiz_start_entry["response"],
-                additional_data=quiz_start_entry.get("quiz_metadata", {})
-            )
+            # student_manager.add_conversation(
+            #     student_id=payload.student_id,
+            #     subject=payload.subject,
+            #     query=quiz_start_entry["query"],
+            #     response=quiz_start_entry["response"],
+            #     additional_data=quiz_start_entry.get("quiz_metadata", {})
+            # )
             
             response = {
                 "message": "Quiz started!",

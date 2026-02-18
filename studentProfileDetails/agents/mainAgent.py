@@ -210,14 +210,12 @@ Avoid robotic formatting.
     if session_context:
         prompt += f"\nPrevious conversation:\n{session_context}\n"
 
-    # Response length control
-    if response_length == "very short":
-        prompt += "\nCRITICAL: 3–5 sentences maximum.\n"
+    # Response length control (updated: very long, long, short only)
+    if response_length == "very long":
+        prompt += "\nProvide comprehensive detailed explanation with examples and context.\n"
     elif response_length == "short":
         prompt += "\nKeep response concise but structured in one short explanation.\n"
-    elif response_length == "medium":
-        prompt += "\nKeep explanation moderately detailed but controlled.\n"
-    else:
+    else:  # long (default)
         prompt += "\nProvide detailed but focused explanation.\n"
 
     return prompt.strip()
