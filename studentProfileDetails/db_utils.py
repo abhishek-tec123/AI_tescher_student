@@ -26,6 +26,9 @@ DEFAULT_SUBJECT_PREFERENCE = {
     "include_example": True,
     "common_mistakes": [],
     "confusion_counter": {},
+    "quiz_score_history": [],
+    "consecutive_low_scores": 0,
+    "consecutive_perfect_scores": 0
 }
 DEFAULT_CORE_MEMORY = {
     "self_description": "",
@@ -400,7 +403,7 @@ class StudentManager:
                     f"conversation_history.{subject}": {
                         "$each": [conversation_doc],
                         "$sort": {"timestamp": -1},
-                        "$slice": 10  # keep last 10 only
+                        "$slice": 50  # keep last 10 only
                     }
                 },
                 "$set": {
@@ -641,7 +644,7 @@ class StudentManager:
         combined_text = "\n\n".join(text_blocks)
 
         # Import summarizer
-        from studentProfileDetails.summrizeStdConv import summarize_text_with_groq  # ✅ Fixed import path
+        from studentProfileDetails.summrizeStdConv import summarize_text_with_groq  # ⚠️ update import path
 
         summary = summarize_text_with_groq(
             text=combined_text,

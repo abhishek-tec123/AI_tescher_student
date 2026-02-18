@@ -48,14 +48,9 @@ except ImportError:
     try:
         from embaddings.VectorStoreInAtls import create_vector_and_store_in_atlas
     except ImportError:
-        # Fallback: find it relative to this file
+        # Direct import from embaddings directory
         import importlib.util
-        # Since this file is in Teacher_AI_Agent/agent/ and the target is in Teacher_AI_Agent/embaddings/
         vector_store_path = os.path.join(_parent_dir, "embaddings", "VectorStoreInAtls.py")
-        if not os.path.exists(vector_store_path):
-            # Try once more if _parent_dir is already Teacher_AI_Agent/embaddings (unlikely based on context)
-            vector_store_path = os.path.join(os.path.dirname(_parent_dir), "Teacher_AI_Agent", "embaddings", "VectorStoreInAtls.py")
-            
         spec = importlib.util.spec_from_file_location("VectorStoreInAtls", vector_store_path)
         vector_store_module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(vector_store_module)

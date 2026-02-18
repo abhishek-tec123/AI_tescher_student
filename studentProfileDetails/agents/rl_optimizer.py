@@ -32,13 +32,13 @@ class RLOptimizer:
         previous_actions = state.get("previous_actions", [])
         
         # If no context retrieved yet, prioritize rewriting or expanding
-        if not state.get("context_chunks"):
+        if not state.get("context"):
             if "rewrite_query" not in previous_actions:
                 return "rewrite_query"
             return "expand_context"
             
         # If we have too many chunks, maybe filter
-        if len(state.get("context_chunks", [])) > 5:
+        if len(state.get("context", [])) > 5:
             if "filter_context" not in previous_actions:
                 return "filter_context"
                 
@@ -96,13 +96,26 @@ class RLOptimizer:
         logger.info(f"RL Action: Filtered {len(chunks)} chunks down to {len(filtered)}")
         return filtered
 
-    def get_initial_state(self, query: str, student_profile: Dict[str, Any]) -> Dict[str, Any]:
-        """Initialize RL state."""
-        return {
-            "original_query": query,
-            "current_query": query,
-            "student_profile": student_profile,
-            "context_chunks": [],
-            "previous_actions": [],
-            "previous_rewards": []
+    def define_state(
+        self,
+        query: str, 
+        context_chunks: List[Any], 
+        student_profile: Dict[str, Any],
+        rewritten_query: str = None, 
+        previous_responses: List[str] = None, 
+        previous_actions: List[str] = None,
+        previous_rewards: List[float] = None
+    ) -> Dict[str, Any]:
+        """
+        Define the state representation for the reinforcement learning agent.
+        """
+        state = {
+            "original_query": query,                                    # The initial query from the user
+            "current_query": rewritten_query if rewritten_query else query,  # Current version of the query (may be rewritten)
+            "context": context_chunks,                                 # Retrieved context chunks (mapped from user's 'context')
+            "student_profile": student_profile,                         # Added for personalization logic
+            "previous_responses": previous_responses if previous_responses else [],  # History of generated responses
+            "previous_actions": previous_actions if previous_actions else [],       # Track taken actions
+            "previous_rewards": previous_rewards if previous_rewards else []         # History of received rewards
         }
+        return state

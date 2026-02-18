@@ -19,8 +19,8 @@ def print_profile(label: str, profile: dict):
 
 def update_progress_and_regression(student_manager, student_id, subject, profile):
     # Snapshot current preference (before) so we only print if model updates it
-    _keys = ("level", "tone", "learning_style", "response_length", "include_example", "common_mistakes", "confusion_counter")
-    _defaults = {"level": "basic", "tone": "friendly", "learning_style": "step-by-step", "response_length": "long", "include_example": True, "common_mistakes": [], "confusion_counter": {}}
+    _keys = ("level", "tone", "learning_style", "response_length", "include_example", "common_mistakes", "confusion_counter", "quiz_score_history", "consecutive_low_scores", "consecutive_perfect_scores")
+    _defaults = {"level": "basic", "tone": "friendly", "learning_style": "step-by-step", "response_length": "long", "include_example": True, "common_mistakes": [], "confusion_counter": {}, "quiz_score_history": [], "consecutive_low_scores": 0, "consecutive_perfect_scores": 0}
     before_snapshot = {k: profile.get(k, _defaults.get(k)) for k in _keys}
 
     history = student_manager.get_conversation_history(
@@ -30,6 +30,7 @@ def update_progress_and_regression(student_manager, student_id, subject, profile
     correct_streak = 0
     wrong_streak = 0
     confusion_counts = {}
+    degradation_triggered = False
 
     for h in history:
         c = h.get("confusion_type", "NO_CONFUSION")
@@ -42,6 +43,32 @@ def update_progress_and_regression(student_manager, student_id, subject, profile
                 break
             wrong_streak += 1
             confusion_counts[c] = confusion_counts.get(c, 0) + 1
+
+    # ------------------
+    # CHECK CONFUSION_COUNTER THRESHOLDS (NEW LOGIC)
+    # ------------------
+    confusion_counter = profile.get("confusion_counter", {})
+    for confusion_type, count in confusion_counter.items():
+        if confusion_type == "FORMULA_CONFUSION" and count >= 2:
+            degradation_triggered = True
+            print(f"📉 Formula confusion threshold reached: {count} occurrences")
+            break
+        elif confusion_type != "FORMULA_CONFUSION" and count >= 3:
+            degradation_triggered = True
+            print(f"📉 Confusion threshold reached for {confusion_type}: {count} occurrences")
+            break
+
+    # ------------------
+    # CHECK QUIZ SCORE THRESHOLDS (NEW LOGIC)
+    # ------------------
+    consecutive_low_scores = profile.get("consecutive_low_scores", 0)
+    consecutive_perfect_scores = profile.get("consecutive_perfect_scores", 0)
+    
+    if consecutive_low_scores >= 2:
+        degradation_triggered = True
+        print(f"📉 Quiz degradation triggered: {consecutive_low_scores} consecutive low scores")
+    elif consecutive_perfect_scores >= 2:
+        print(f"📈 Quiz progression triggered: {consecutive_perfect_scores} consecutive perfect scores")
 
     # ------------------
     # LEVEL (3 correct → level up; 3 wrong → level down)
@@ -61,19 +88,43 @@ def update_progress_and_regression(student_manager, student_id, subject, profile
             level = "basic"
 
     # ------------------
-    # RESPONSE_LENGTH (from streaks; stored in DB)
+    # RESPONSE_LENGTH (updated logic: quiz performance has absolute priority over confusion)
     # ------------------
     response_length = profile.get("response_length", "long")
+    degradation_include_example = False
 
-    if correct_streak >= 5:
-        response_length = "very short"
-    elif correct_streak >= 3:
-        response_length = "short"
-
-    if wrong_streak >= 5:
-        response_length = "long"
-    elif wrong_streak >= 3:
-        response_length = "short"
+    # PERFECT PERFORMANCE: Decrease response length (ABSOLUTE PRIORITY - overrides confusion)
+    if consecutive_perfect_scores >= 2:
+        if response_length == "very long":
+            response_length = "long"
+        elif response_length == "long":
+            response_length = "short"
+        print(f"📈 Perfect performance: response_length reduced to {response_length}")
+    # POOR PERFORMANCE: Increase response length (ABSOLUTE PRIORITY - overrides confusion)
+    elif consecutive_low_scores >= 2:
+        if response_length == "short":
+            response_length = "long"
+        elif response_length == "long":
+            response_length = "very long"
+        print(f"📉 Poor performance: response_length increased to {response_length}")
+        degradation_include_example = True
+    # REGULAR STREAK-BASED LOGIC (only if no quiz performance)
+    elif correct_streak >= 3 and not degradation_triggered:
+        if response_length == "very long":
+            response_length = "long"
+        elif response_length == "long":
+            response_length = "short"
+        print(f"📈 Good performance: response_length reduced to {response_length}")
+    # CONFUSION-BASED DEGRADATION (only if no quiz performance)
+    elif degradation_triggered or wrong_streak >= 3:
+        if response_length == "short":
+            response_length = "long"
+        elif response_length == "long":
+            response_length = "very long"
+        print(f"📉 Confusion-based degradation: response_length increased to {response_length}")
+        degradation_include_example = True
+    else:
+        degradation_include_example = False
 
     # ------------------
     # LEARNING STYLE (degressive: more examples when repeatedly confused)
@@ -85,11 +136,25 @@ def update_progress_and_regression(student_manager, student_id, subject, profile
             break
 
     # ------------------
-    # INCLUDE_EXAMPLE (advanced → False for shorter; else True; examples style → True)
+    # INCLUDE_EXAMPLE (updated logic: quiz performance has absolute priority over confusion)
     # ------------------
     include_example = profile.get("include_example", True)
-    if level == "advanced":
+    
+    # PERFECT PERFORMANCE: Disable examples (ABSOLUTE PRIORITY - overrides confusion)
+    if consecutive_perfect_scores >= 2:
         include_example = False
+        print(f"📈 Perfect performance: examples disabled")
+    # POOR PERFORMANCE: Enable examples (ABSOLUTE PRIORITY - overrides confusion)
+    elif consecutive_low_scores >= 2:
+        include_example = True
+        print(f"📉 Poor performance: examples enabled")
+    # REGULAR LOGIC (only if no quiz performance)
+    elif degradation_triggered or degradation_include_example:
+        include_example = True
+        print(f"📉 Confusion-based degradation: examples enabled")
+    elif level == "advanced" and not degradation_triggered:
+        include_example = False
+        print(f"📈 Advanced level: examples disabled")
     elif learning_style == "examples":
         include_example = True
     else:
@@ -106,7 +171,8 @@ def update_progress_and_regression(student_manager, student_id, subject, profile
     # ------------------
     SUBJECT_PREFERENCE_KEYS = (
         "level", "tone", "learning_style", "response_length",
-        "include_example", "common_mistakes", "confusion_counter"
+        "include_example", "common_mistakes", "confusion_counter",
+        "quiz_score_history", "consecutive_low_scores", "consecutive_perfect_scores"
     )
     full_preference = {k: profile.get(k) for k in SUBJECT_PREFERENCE_KEYS if k in profile}
     # Ensure we have all keys with defaults if missing
@@ -114,6 +180,7 @@ def update_progress_and_regression(student_manager, student_id, subject, profile
         "level": "basic", "tone": "friendly", "learning_style": "step-by-step",
         "response_length": "long", "include_example": True,
         "common_mistakes": [], "confusion_counter": {},
+        "quiz_score_history": [], "consecutive_low_scores": 0, "consecutive_perfect_scores": 0
     }
     for k, v in defaults.items():
         full_preference.setdefault(k, v)
@@ -123,12 +190,12 @@ def update_progress_and_regression(student_manager, student_id, subject, profile
     )
 
     # Only print before/after if preference was actually updated (level, learning_style, response_length, include_example, or common_mistakes/confusion_counter from wrong question)
-    updatable = ("level", "learning_style", "response_length", "include_example", "common_mistakes", "confusion_counter")
+    updatable = ("level", "learning_style", "response_length", "include_example", "common_mistakes", "confusion_counter", "quiz_score_history", "consecutive_low_scores", "consecutive_perfect_scores")
     changed = any(full_preference.get(k) != before_snapshot.get(k) for k in updatable)
     if changed:
         _print_profile("BEFORE (subject preference)", before_snapshot)
         _print_profile("AFTER (subject preference)", full_preference)
-        direction = "📈 progressive" if (correct_streak >= 3 and wrong_streak == 0) else ("📉 degressive" if wrong_streak >= 3 else "📊")
+        direction = "📈 progressive" if (correct_streak >= 3 and wrong_streak == 0 and not degradation_triggered) else ("📉 degressive" if degradation_triggered or wrong_streak >= 3 else "📊")
         print(f"{direction} Learning state updated (correct_streak={correct_streak}, wrong_streak={wrong_streak})")
     else:
         print("Preference not updated (no change).")
@@ -150,6 +217,9 @@ def normalize_student_preference(pref: dict) -> dict:
         "include_example": True,
         "common_mistakes": [],
         "confusion_counter": {},
+        "quiz_score_history": [],
+        "consecutive_low_scores": 0,
+        "consecutive_perfect_scores": 0
     }
 
     for k, v in defaults.items():
