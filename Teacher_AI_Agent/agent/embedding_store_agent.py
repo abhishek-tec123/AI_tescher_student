@@ -48,9 +48,9 @@ except ImportError:
     try:
         from embaddings.VectorStoreInAtls import create_vector_and_store_in_atlas
     except ImportError:
-        # Direct import from same directory
+        # Direct import from embaddings directory
         import importlib.util
-        vector_store_path = os.path.join(_current_dir, "VectorStoreInAtls.py")
+        vector_store_path = os.path.join(_parent_dir, "embaddings", "VectorStoreInAtls.py")
         spec = importlib.util.spec_from_file_location("VectorStoreInAtls", vector_store_path)
         vector_store_module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(vector_store_module)
