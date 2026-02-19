@@ -358,11 +358,25 @@ def evaluate_response(
         # ensure all values are floats
         scores = {k: float(v) for k, v in scores.items()}
 
-        return scores
+        # Convert all individual scores to percentages
+        percentage_scores = {k: round(v * 100, 1) for k, v in scores.items()}
+        
+        # Invert hallucination_risk so lower values = lower risk (more intuitive)
+        if "hallucination_risk" in percentage_scores:
+            percentage_scores["hallucination_risk"] = round(100 - percentage_scores["hallucination_risk"], 1)
+
+        # Calculate overall score as average of original scores, then convert to percentage
+        overall_score = round(sum(scores.values()) / len(scores), 3)
+        overall_percentage = round(overall_score * 100, 1)
+
+        # Add overall metrics to the result
+        percentage_scores["overall_score"] = overall_percentage
+
+        return percentage_scores
 
     except Exception:
         # ---- Hard fallback (schema-safe) ----
-        return {
+        fallback_scores = {
             # "clarity": 0.5,
             # "correctness": 0.5,
             # "personalization": 0.3,
@@ -371,5 +385,20 @@ def evaluate_response(
             # "model_certainty": 0.4,
             "rag_relevance": 0.3,
             "answer_completeness": 0.4,
-            "hallucination_risk": 0.5,
+            "hallucination_risk": 0.1,  # Low risk (will be inverted to 90.0)
         }
+        
+        # Convert all fallback scores to percentages
+        percentage_fallback = {k: round(v * 100, 1) for k, v in fallback_scores.items()}
+        
+        # Invert hallucination_risk so lower values = lower risk
+        if "hallucination_risk" in percentage_fallback:
+            percentage_fallback["hallucination_risk"] = round(100 - percentage_fallback["hallucination_risk"], 1)
+        
+        # Calculate overall score for fallback and convert to percentage
+        overall_score = round(sum(fallback_scores.values()) / len(fallback_scores), 3)
+        overall_percentage = round(overall_score * 100, 1)
+        
+        percentage_fallback["overall_score"] = overall_percentage
+        
+        return percentage_fallback
