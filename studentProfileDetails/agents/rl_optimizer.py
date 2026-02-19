@@ -72,9 +72,14 @@ class RLOptimizer:
         """
         Action: Rewrite the query for better retrieval.
         """
-        prompt = "Rewrite the following student query to be more specific and suitable for a textbook search. Output ONLY the rewritten query text and nothing else. No conversational filler, no multiple options, no preamble."
+        prompt = """Rewrite the student query for textbook search. 
+Rules:
+1. If the query is a clear standalone topic (e.g., 'Thermodynamics', 'Photosynthesis'), preserve it as is or add only academic specificity. 
+2. Only use the provided context to disambiguate vague snippets (e.g., 'examples' -> 'examples of [last mentioned topic]'). 
+3. DO NOT carry over previous topics if the new query is a shift in subject.
+Output ONLY the rewritten query text."""
         if context_text:
-            prompt += f"\nUse this context if relevant: {context_text[:500]}"
+            prompt += f"\nRecent Context:\n{context_text[:500]}"
             
         try:
             rewritten = generate_response_with_groq(query=query, system_prompt=prompt)

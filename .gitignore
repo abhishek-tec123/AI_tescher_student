@@ -7,4 +7,5 @@ node_modules/
 __pycache__/
 *.pyc
 data/
-checking/
+cheking/
+test_*.py

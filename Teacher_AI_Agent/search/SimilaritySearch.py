@@ -23,7 +23,7 @@ VECTOR_INDEX_NAME = "vector_index"
 VECTOR_PATH = "embedding.vector"
 
 TOP_K = 10
-MIN_SCORE_THRESHOLD = 0.35  # Minimum cosine similarity for chunks to be considered relevant (lowered from 0.40 to handle edge cases)
+MIN_SCORE_THRESHOLD = 0.30  # Lowered from 0.35 to improve recall for short or context-dependent queries
 
 # -----------------------------
 # Query extraction helper
@@ -49,6 +49,23 @@ def extract_core_question(query: str) -> str:
             if len(best_chunk) > 10: # Only if it's a meaningful phrase
                 return best_chunk[:500]
 
+    # Pattern 0: "Search Query (RL Optimized):\n<query>"
+    # This comes from mainAgent.py after RL optimization
+    # Using re.DOTALL and a more flexible pattern to catch the content before the next section
+    match = re.search(r"Search Query \(RL Optimized\):\s*\n\s*(.+?)(?:\n\n|\n[A-Z][a-z]+:|$)", query, re.DOTALL | re.IGNORECASE)
+    if match:
+        core = match.group(1).strip()
+        if core:
+            # print(f"DEBUG: Extracted via Pattern 0: {core[:100]}...")
+            return core
+
+    # Pattern 0.1: "Original Student Question:\n<question>"
+    match = re.search(r"Original Student Question:\s*\n\s*(.+?)(?:\n\n|\nSearch Query|$)", query, re.DOTALL | re.IGNORECASE)
+    if match:
+        core = match.group(1).strip()
+        if core:
+            return core
+
     # Pattern 1: "Current Question:\n<question>"
     match = re.search(r"Current Question:\s*\n\s*(.+?)(?:\n\n|\nClass:|\nStudent preferences:|$)", query, re.DOTALL | re.IGNORECASE)
     if match:
@@ -71,15 +88,25 @@ def extract_core_question(query: str) -> str:
     # Fallback: use first line or first 200 chars if query is very long
     lines = query.strip().split('\n')
     if len(lines) > 0:
-        first_line = lines[0].strip()
+        # Avoid systemic lines in fallbacks
+        systemic_prefixes = (
+            'Class:', 'Subject:', 'Student', 'Rules:', 'Previous', 
+            'You are an expert', 'IMPORTANT INSTRUCTIONS', 'Target student', 'Use a friendly'
+        )
+        
         # If first line is very short and looks like a question, use it
-        if len(first_line) < 200 and '?' in first_line:
+        first_line = lines[0].strip()
+        if len(first_line) < 200 and '?' in first_line and not first_line.startswith(systemic_prefixes):
             return first_line
+            
         # Otherwise, if query is very long (>500 chars), use first meaningful line
         if len(query) > 500:
-            for line in lines[:5]:  # Check first 5 lines
+            for line in lines:  
                 line = line.strip()
-                if line and len(line) < 200 and not line.startswith(('Class:', 'Subject:', 'Student', 'Rules:', 'Previous')):
+                if line and 10 < len(line) < 300 and not line.startswith(systemic_prefixes):
+                    # Check if it contains labels we might have missed
+                    if "Question:" in line or "Query:" in line:
+                        continue
                     return line
     
     return query[:500] if len(query) > 500 else query

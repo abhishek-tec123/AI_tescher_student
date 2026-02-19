@@ -148,7 +148,8 @@ def build_teacher_prompt(
     class_name: str,
     subject: str,
     confusion_type: str,
-    session_context: str
+    session_context: str,
+    current_query: str = "Current Question"
 ) -> str:
 
     base_prompt = get_base_prompt()
@@ -189,27 +190,32 @@ IMPORTANT INSTRUCTIONS:
 8. Do NOT use labels like "Subtopics:" or markdown formatting.
 9. Use clean plain text with this structure:
 
-Topic: <Main topic>
+Topic: **<Main topic>**
+- Clear explanation as per the student prefernce with suitable subheading.
+- Clear explanation as per the student prefernce with suitable subheading.
 
-- Key idea
-  Clear and slightly deep explanation
+10. If include_example is True, include one simple example naturally on a new line:
+    **Example**: *Your example here*
 
-- Key idea
-  Clear and slightly deep explanation
-
-10. If include_example is True, include one simple example naturally.
 11. If common mistakes are provided, include one brief correction section written as:
-   Common mistake
-   Short clarification
+    **Common mistake**: *Short clarification*
 
 12. End with a short encouraging sentence.
 
 Keep the response structured but natural.
 Avoid robotic formatting.
+
+13. CRITICAL: Use Unicode subscripts (₀₁₂₃₄₅₆₇₈₉) and superscripts (⁰¹²³⁴⁵⁶⁷⁸⁹) for ALL scientific notation.
+    - Chemistry: H₂O, CO₂, C₆H₁₂O₆ (use subscripts for numbers in formulas).
+    - Physics: vᵢ (initial velocity), aₙ (acceleration), 10² m/s.
+    - Math: x², (a+b)³, a₁, a₂.
+    - DO NOT use regular numbers for subscripts or superscripts.
 """
 
+    prompt += f"\nCRITICAL: The 'Topic: <Main topic>' header below MUST strictly align with the student's CURRENT question: '{current_query}'\n"
+    
     if session_context:
-        prompt += f"\nPrevious conversation:\n{session_context}\n"
+        prompt += f"\nPrevious conversation (Last 5 turns for context only):\n{session_context}\n"
 
     # Response length control (updated: very long, long, short only)
     if response_length == "very long":
@@ -260,11 +266,14 @@ def diagnosis_chat(
     personal_info_summary = ""
     
     if context:
+        # Limit to last 5 turns for the teacher's final prompt
+        limited_context = context[-5:]
+        
         # Extract personal information for easy access
         personal_info = []
-        for turn in context:
+        for turn in limited_context:
             if isinstance(turn, dict):
-                query = turn.get('query', '').lower()
+                query_text = turn.get('query', '').lower()
                 # Handle both string responses and dict responses
                 response_data = turn.get('response', '')
                 if isinstance(response_data, dict):
@@ -273,7 +282,7 @@ def diagnosis_chat(
                     response = response_data
                 
                 # Look for personal information sharing
-                if any(phrase in query for phrase in ['my name is', 'i am', 'i\'m', 'my favorite', 'i like', 'i dislike']):
+                if any(phrase in query_text for phrase in ['my name is', 'i am', 'i\'m', 'my favorite', 'i like', 'i dislike']):
                     personal_info.append(f"Student shared: {turn.get('query','')}")
                 
                 session_history_text += (
@@ -305,7 +314,17 @@ def diagnosis_chat(
         state["previous_actions"].append(action)
         
         if action == "rewrite_query":
-            state["current_query"] = optimizer.rewrite_query(state["current_query"])
+            # Only pass the last 2 turns of context for rewriting to avoid "sticky topics"
+            recent_context = ""
+            if context:
+                last_turns = context[-2:]
+                for turn in last_turns:
+                    if isinstance(turn, dict):
+                        recent_context += f"Q: {turn.get('query','')}\nA: {turn.get('response','')}\n"
+                    elif isinstance(turn, str):
+                        recent_context += f"{turn}\n"
+            
+            state["current_query"] = optimizer.rewrite_query(state["current_query"], context_text=recent_context)
         elif action == "expand_context":
             top_k += 5
         elif action == "generate_response":
@@ -317,10 +336,12 @@ def diagnosis_chat(
         class_name=class_name,
         subject=subject,
         confusion_type=confusion_type,
-        session_context=full_context
+        session_context=full_context,
+        current_query=query
     )
 
-    full_prompt += f"\nCurrent Question:\n{state['current_query']}\n"
+    full_prompt += f"\nOriginal Student Question:\n{query}\n"
+    full_prompt += f"\nSearch Query (RL Optimized):\n{state['current_query']}\n"
 
     # -----------------------------
     # Ask LLM (with RL-optimized parameters)
