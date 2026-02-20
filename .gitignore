@@ -8,3 +8,5 @@ __pycache__/
 *.pyc
 data/
 cheking/
+get-pip.py
+embeddings.json

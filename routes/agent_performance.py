@@ -1,10 +1,14 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends, status
 from typing import List
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, validator
 from datetime import datetime
 from studentProfileDetails.agents.agent_performance_monitor import AgentPerformanceMonitor
+from studentProfileDetails.auth.dependencies import get_current_user, require_role, require_any_role, require_permission
+import logging
 
-router = APIRouter(prefix="/agent-performance", tags=["agent-performance"])
+logger = logging.getLogger(__name__)
+
+router = APIRouter(tags=["agent-performance"])
 
 
 # ================================
@@ -12,28 +16,47 @@ router = APIRouter(prefix="/agent-performance", tags=["agent-performance"])
 # ================================
 
 class PerformanceResponse(BaseModel):
-    agent_id: str
+    agent_id: str = Field(..., min_length=1, max_length=100)
     agent_metadata: dict
     performance_period: str
-    total_conversations: int
+    total_conversations: int = Field(..., ge=0)
     metrics: dict
     performance_level: str
     health_indicators: dict
     trend_analysis: dict
     recommendations: List[str]
     last_updated: str
+    
+    @validator('agent_id')
+    def validate_agent_id(cls, v):
+        if not v or v.strip() == '':
+            raise ValueError('Agent ID cannot be empty')
+        return v.strip()
+    
+    @validator('performance_level')
+    def validate_performance_level(cls, v):
+        valid_levels = ['Excellent', 'Good', 'Average', 'Poor', 'Critical']
+        if v not in valid_levels:
+            raise ValueError(f'Performance level must be one of: {valid_levels}')
+        return v
 
 
 class AgentOverviewResponse(BaseModel):
-    agent_id: str
-    agent_name: str
-    class_name: str
-    subject: str
-    overall_score: float
+    agent_id: str = Field(..., min_length=1, max_length=100)
+    agent_name: str = Field(..., min_length=1, max_length=200)
+    class_name: str = Field(..., min_length=1, max_length=100)
+    subject: str = Field(..., min_length=1, max_length=100)
+    overall_score: float = Field(..., ge=0, le=100)
     performance_level: str
-    total_conversations: int
+    total_conversations: int = Field(..., ge=0)
     health_status: str
     last_updated: str
+    
+    @validator('agent_id', 'agent_name', 'class_name', 'subject')
+    def validate_non_empty_fields(cls, v):
+        if not v or v.strip() == '':
+            raise ValueError('Field cannot be empty')
+        return v.strip()
 
 
 class AgentOverviewWithCountResponse(BaseModel):
@@ -54,23 +77,60 @@ class HealthCheckResponse(BaseModel):
 
 @router.get("/overview", response_model=AgentOverviewWithCountResponse)
 async def get_all_agents_overview(
-    days: int = Query(default=30, ge=1, le=365)
+    days: int = Query(default=30, ge=1, le=365, description="Number of days to look back for performance data"),
+    current_user: dict = Depends(require_any_role(["admin", "teacher"]))
 ):
+    """Get performance overview for all agents.
+    
+    Args:
+        days: Number of days to look back for performance data (1-365)
+        current_user: Authenticated user with admin or teacher role
+        
+    Returns:
+        List of agents with their performance overview
+    
+    Raises:
+        HTTPException: If authentication fails or data retrieval fails
+    """
     try:
+        logger.info(f"User {current_user.get('user_id')} requesting agent overview for {days} days")
+        
         monitor = AgentPerformanceMonitor()
         overview_data = monitor.get_all_agents_overview(days)
+        
+        if not overview_data:
+            logger.warning("No agent data found")
+            return AgentOverviewWithCountResponse(
+                agents=[],
+                total_agents=0
+            )
+        
         agents = [AgentOverviewResponse(**agent) for agent in overview_data]
+        logger.info(f"Retrieved {len(agents)} agents overview")
+        
         return AgentOverviewWithCountResponse(
             agents=agents,
             total_agents=len(agents)
         )
+        
+    except ValueError as e:
+        logger.error(f"Validation error in get_all_agents_overview: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid request parameters: {str(e)}"
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Unexpected error in get_all_agents_overview: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve agent performance overview"
+        )
 
 
 @router.get("/health-check", response_model=HealthCheckResponse)
 async def get_health_check(
-    threshold_score: float = Query(default=60, ge=0, le=100)
+    threshold_score: float = Query(default=60, ge=0, le=100),
+    current_user: dict = Depends(require_any_role(["admin", "teacher"]))
 ):
     try:
         monitor = AgentPerformanceMonitor()
@@ -96,7 +156,8 @@ async def get_health_check(
 
 @router.get("/metrics/summary")
 async def get_metrics_summary(
-    days: int = Query(default=30, ge=1, le=365)
+    days: int = Query(default=30, ge=1, le=365),
+    current_user: dict = Depends(require_any_role(["admin", "teacher"]))
 ):
     try:
         monitor = AgentPerformanceMonitor()
@@ -144,20 +205,64 @@ async def get_metrics_summary(
 @router.get("/agent/{agent_id}", response_model=PerformanceResponse)
 async def get_agent_performance(
     agent_id: str,
-    days: int = Query(default=30, ge=1, le=365)
+    days: int = Query(default=30, ge=1, le=365, description="Number of days to look back for performance data"),
+    current_user: dict = Depends(require_any_role(["admin", "teacher"]))
 ):
+    """Get detailed performance metrics for a specific agent.
+    
+    Args:
+        agent_id: Unique identifier for the agent
+        days: Number of days to look back for performance data (1-365)
+        current_user: Authenticated user with admin or teacher role
+        
+    Returns:
+        Detailed performance metrics for the specified agent
+        
+    Raises:
+        HTTPException: If agent not found, authentication fails, or data retrieval fails
+    """
     try:
+        # Validate agent_id
+        if not agent_id or agent_id.strip() == '':
+            raise ValueError("Agent ID cannot be empty")
+        
+        agent_id = agent_id.strip()
+        logger.info(f"User {current_user.get('user_id')} requesting performance for agent {agent_id}")
+        
         monitor = AgentPerformanceMonitor()
         performance_data = monitor.get_agent_performance_metrics(agent_id, days)
+        
+        if not performance_data:
+            logger.warning(f"No performance data found for agent {agent_id}")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No performance data found for agent {agent_id}"
+            )
+        
+        logger.info(f"Retrieved performance data for agent {agent_id}")
         return PerformanceResponse(**performance_data)
+        
+    except ValueError as e:
+        logger.error(f"Validation error in get_agent_performance: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid request parameters: {str(e)}"
+        )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Unexpected error in get_agent_performance: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve agent performance data"
+        )
 
 
 @router.get("/agent/{agent_id}/trends")
 async def get_agent_trends(
     agent_id: str,
-    days: int = Query(default=30, ge=7, le=365)
+    days: int = Query(default=30, ge=7, le=365),
+    current_user: dict = Depends(require_any_role(["admin", "teacher"]))
 ):
     try:
         monitor = AgentPerformanceMonitor()

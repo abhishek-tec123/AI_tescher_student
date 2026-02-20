@@ -1,6 +1,7 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from studentProfileDetails.agents.vector_performance_updater import get_vector_performance
 from studentProfileDetails.agents.agent_performance_monitor import AgentPerformanceMonitor
+from studentProfileDetails.auth.dependencies import require_any_role
 import os
 from dotenv import load_dotenv
 from pymongo import MongoClient
@@ -62,8 +63,10 @@ def get_all_agent_performance():
             detail=f"Error retrieving agent performance: {str(e)}"
         )
 
-@router.get("/agents/all-agents-performance")
-async def get_all_agents_performance():
+@router.get("/all-agents-performance")
+async def get_all_agents_performance(
+    current_user: dict = Depends(require_any_role(["admin", "teacher"]))
+):
     """
     Get performance details for all agents separately.
     
@@ -76,7 +79,42 @@ async def get_all_agents_performance():
     - document ID
     """
     try:
-        all_agents = get_all_agent_performance()
+        print(f"🚀 User {current_user.get('user_id')} requesting all agents performance")
+        
+        # Use the optimized AgentPerformanceMonitor instead of direct MongoDB scan
+        monitor = AgentPerformanceMonitor()
+        overview_data = monitor.get_all_agents_overview(30)  # Use default 30 days
+        
+        print(f"📋 Got overview for {len(overview_data)} agents, building detailed response...")
+        
+        # Transform overview data to match expected format WITHOUT individual database calls
+        all_agents = []
+        for agent in overview_data:
+            # Use cached overview data instead of individual database calls
+            agent_performance = {
+                "subject_agent_id": agent["agent_id"],
+                "database": agent["class_name"],
+                "collection": agent["subject"],
+                "agent_metadata": {
+                    "agent_name": agent["agent_name"]
+                },
+                "performance": {
+                    # Use overview metrics instead of detailed performance summary
+                    "overall_score": agent["overall_score"],
+                    "performance_level": agent["performance_level"],
+                    "total_conversations": agent["total_conversations"],
+                    "health_status": agent["health_status"]
+                },
+                "document_id": agent.get("agent_id", ""),  # Using agent_id as fallback
+                "overall_score": agent["overall_score"],
+                "performance_level": agent["performance_level"],
+                "total_conversations": agent["total_conversations"],
+                "health_status": agent["health_status"]
+            }
+            
+            all_agents.append(agent_performance)
+        
+        print(f"✅ Built response for {len(all_agents)} agents without individual DB calls")
         
         return {
             "success": True,
@@ -86,28 +124,36 @@ async def get_all_agents_performance():
         }
         
     except Exception as e:
+        print(f"❌ Error retrieving all agents performance: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Error retrieving all agents performance: {str(e)}"
         )
 
-@router.get("/agents/agent-performance/{agent_id}")
-async def get_single_agent_performance(agent_id: str):
+@router.get("/agent-performance/{agent_id}")
+async def get_single_agent_performance(
+    agent_id: str,
+    current_user: dict = Depends(require_any_role(["admin", "teacher"]))
+):
     """
     Get performance details for a specific agent.
     
     Returns complete performance matrix from vector documents.
     """
     try:
+        print(f"🚀 User {current_user.get('user_id')} requesting performance for agent {agent_id}")
+        
         # Get performance from vector documents
         vector_performance = get_vector_performance(agent_id)
         
         if not vector_performance or vector_performance.get("total_conversations", 0) == 0:
             # Try to get from agent performance summary as fallback
+            print(f"📦 Vector performance empty for {agent_id}, using monitor fallback")
             monitor = AgentPerformanceMonitor()
             summary = monitor.get_agent_performance_summary(agent_id)
             
             if summary:
+                print(f"✅ Retrieved performance summary for {agent_id}")
                 return {
                     "success": True,
                     "message": f"Performance data for {agent_id}",
@@ -116,11 +162,13 @@ async def get_single_agent_performance(agent_id: str):
                     "performance": summary
                 }
             else:
+                print(f"❌ No performance data found for agent {agent_id}")
                 raise HTTPException(
                     status_code=404,
                     detail=f"Agent {agent_id} not found"
                 )
         
+        print(f"✅ Retrieved vector performance for {agent_id}")
         return {
             "success": True,
             "message": f"Performance data for {agent_id}",
@@ -132,6 +180,7 @@ async def get_single_agent_performance(agent_id: str):
     except HTTPException:
         raise
     except Exception as e:
+        print(f"❌ Error retrieving agent performance for {agent_id}: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Error retrieving agent performance: {str(e)}"
