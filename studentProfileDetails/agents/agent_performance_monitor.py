@@ -5,6 +5,8 @@ from pymongo import MongoClient
 from bson import ObjectId
 import statistics
 from enum import Enum
+from dotenv import load_dotenv
+load_dotenv()
 
 class PerformanceLevel(Enum):
     EXCELLENT = "Excellent"
@@ -24,6 +26,63 @@ class AgentPerformanceMonitor:
         # Import vector performance updater
         from .vector_performance_updater import VectorPerformanceUpdater
         self.vector_updater = VectorPerformanceUpdater()
+        
+        # Cache for agent registry to avoid repeated database scans
+        self._agent_registry_cache = None
+        self._cache_timestamp = None
+        self._cache_ttl = 300  # 5 minutes cache
+    
+    def _build_agent_registry(self) -> Dict[str, Dict[str, Any]]:
+        """Build and cache agent registry from vector databases."""
+        current_time = datetime.utcnow().timestamp()
+        
+        # Return cached data if still valid
+        if (self._agent_registry_cache and self._cache_timestamp and 
+            current_time - self._cache_timestamp < self._cache_ttl):
+            return self._agent_registry_cache
+        
+        # Build fresh registry
+        agent_registry = {}
+        
+        # Scan all databases and collections for agents
+        for db_name in self.client.list_database_names():
+            if db_name in ["admin", "local", "config", "teacher_ai"]:
+                continue
+                
+            db = self.client[db_name]
+            
+            for collection_name in db.list_collection_names():
+                collection = db[collection_name]
+                
+                # Use aggregation to get unique agent_ids with performance data
+                pipeline = [
+                    {"$match": {"subject_agent_id": {"$exists": True}}},
+                    {"$group": {
+                        "_id": "$subject_agent_id",
+                        "db_name": {"$first": db_name},
+                        "collection_name": {"$first": collection_name},
+                        "agent_metadata": {"$first": "$agent_metadata"},
+                        "performance": {"$first": "$performance"}
+                    }}
+                ]
+                
+                results = list(collection.aggregate(pipeline))
+                
+                for result in results:
+                    agent_id = result["_id"]
+                    if agent_id and isinstance(agent_id, str):
+                        agent_registry[agent_id] = {
+                            "db_name": result["db_name"],
+                            "collection_name": result["collection_name"],
+                            "agent_metadata": result["agent_metadata"],
+                            "performance": result["performance"]
+                        }
+        
+        # Update cache
+        self._agent_registry_cache = agent_registry
+        self._cache_timestamp = current_time
+        
+        return agent_registry
         
     def create_agent_performance_summary(self, subject_agent_id: str, agent_metadata: dict) -> bool:
         """Create initial performance summary for a new agent."""
@@ -476,31 +535,51 @@ class AgentPerformanceMonitor:
         }
     
     def get_all_agents_overview(self, days: int = 30) -> List[Dict[str, Any]]:
-        """Get performance overview for all agents."""
-        # Get all unique agent IDs
-        agent_ids = set()
+        """Get performance overview for all agents from cached registry."""
+        # Get agent registry from cache
+        agent_registry = self._build_agent_registry()
         
-        for subject in self.students_collection.find():
-            if "conversation_history" in subject:
-                for conversations in subject["conversation_history"].values():
-                    for conv in conversations:
-                        if "subject_agent_id" in conv:
-                            agent_ids.add(conv["subject_agent_id"])
-        
-        # Get performance for each agent
+        # Build overview from cached registry
         overview = []
-        for agent_id in agent_ids:
-            performance = self.get_agent_performance_metrics(agent_id, days)
+        for agent_id, agent_info in agent_registry.items():
+            performance = agent_info["performance"]
+            
+            # Use cached performance data if available, otherwise get default
+            if performance:
+                metrics = performance.get("metrics", {})
+                performance_level = performance.get("performance_level", "Critical")
+                health_status = performance.get("health_indicators", {}).get("quality_health", {}).get("status", "Critical")
+                last_updated = performance.get("last_updated", datetime.utcnow().isoformat())
+            else:
+                # Fallback to default values
+                metrics = {
+                    "overall_score": 0,
+                    "pedagogical_value": 0,
+                    "critical_confidence": 0,
+                    "rag_relevance": 0,
+                    "answer_completeness": 0,
+                    "hallucination_risk": 0
+                }
+                performance_level = "Critical"
+                health_status = "Critical"
+                last_updated = datetime.utcnow().isoformat()
+            
+            # Handle both enum and string types
+            if hasattr(performance_level, 'value'):
+                performance_level = performance_level.value
+            else:
+                performance_level = str(performance_level)
+            
             overview.append({
                 "agent_id": agent_id,
-                "agent_name": performance["agent_metadata"].get("agent_metadata", {}).get("agent_name", "Unknown"),
-                "class_name": performance["agent_metadata"].get("class", "Unknown"),
-                "subject": performance["agent_metadata"].get("subject", "Unknown"),
-                "overall_score": performance["metrics"]["overall_score"],
-                "performance_level": performance["performance_level"].value,
-                "total_conversations": performance["total_conversations"],
-                "health_status": performance["health_indicators"]["quality_health"]["status"],
-                "last_updated": performance["last_updated"]
+                "agent_name": agent_info["agent_metadata"].get("agent_name", "Unknown"),
+                "class_name": agent_info["db_name"],
+                "subject": agent_info["collection_name"],
+                "overall_score": metrics.get("overall_score", 0),
+                "performance_level": performance_level,
+                "total_conversations": performance.get("total_conversations", 0) if performance else 0,
+                "health_status": health_status,
+                "last_updated": last_updated
             })
         
         # Sort by overall score
