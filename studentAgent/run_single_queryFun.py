@@ -11,7 +11,8 @@ def run_query(
     query: str,
     db_name: str,
     collection_name: str,
-    student_profile: dict = None
+    student_profile: dict = None,
+    top_k: int = 10
 ):
     """
     Execute a single query using the RetrieverAgent and print formatted logs.
@@ -26,7 +27,8 @@ def run_query(
             query=query,
             db_name=db_name,
             collection_name=collection_name,
-            student_profile=student_profile
+            student_profile=student_profile,
+            top_k=top_k
         )
 
         response = result.get("response", result) if isinstance(result, dict) else result

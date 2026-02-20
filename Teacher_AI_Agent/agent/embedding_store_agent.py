@@ -43,7 +43,7 @@ except ImportError:
         model_cache = model_cache_module.model_cache
 
 try:
-    from embaddings.VectorStoreInAtls import create_vector_and_store_in_atlas
+    from Teacher_AI_Agent.embaddings.VectorStoreInAtls import create_vector_and_store_in_atlas
 except ImportError:
     try:
         from embaddings.VectorStoreInAtls import create_vector_and_store_in_atlas
