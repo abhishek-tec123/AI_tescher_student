@@ -34,9 +34,9 @@ except ImportError:
     try:
         from model_cache import model_cache
     except ImportError:
-        # Direct import from same directory
+        # Direct import from parent directory
         import importlib.util
-        model_cache_path = os.path.join(_current_dir, "model_cache.py")
+        model_cache_path = os.path.join(_parent_dir, "model_cache.py")
         spec = importlib.util.spec_from_file_location("model_cache", model_cache_path)
         model_cache_module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(model_cache_module)

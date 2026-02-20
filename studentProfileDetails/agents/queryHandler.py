@@ -6,23 +6,33 @@ from studentProfileDetails.agents.mainAgent import detect_intent_and_topic
 from studentProfileDetails.agents.quiz_generator import generate_quiz_from_history
 from studentProfileDetails.agents.notes_agent import generate_notes
 from studentProfileDetails.summrizeStdConv import update_running_summary
+from studentProfileDetails.utils.agent_utils import get_dynamic_agent_id_for_subject
 import time
+import threading
 
-
-def get_agent_id_for_subject(subject: str) -> str:
-    """Get agent_id for a given subject."""
-    # Simple mapping based on common agent naming convention
-    subject_agent_mapping = {
-        "Science": "agent_K3GVB",
-        "Mathematics": "agent_MATH_001", 
-        "Physics": "agent_PHYSICS_001",
-        "Chemistry": "agent_CHEM_001",
-        "Biology": "agent_BIO_001",
-        "History": "agent_HIST_001",
-        "English": "agent_ENG_001"
-    }
-    
-    return subject_agent_mapping.get(subject, f"agent_{subject.upper()}_001")
+def update_performance_background(student_manager, student_id, subject, query, response, evolution_scores):
+    """Background function to update performance metrics asynchronously."""
+    try:
+        agent_id = get_dynamic_agent_id_for_subject(student_manager, student_id, subject)
+        if agent_id:
+            student_manager.add_conversation(
+                student_id=student_id,
+                subject=subject,
+                query=query,
+                response=response,
+                evaluation=evolution_scores,
+                quality_scores=evolution_scores,
+                feedback=evolution_scores.get("feedback", "like"),
+                confusion_type=evolution_scores.get("confusion_type", "NO_CONFUSION"),
+                additional_data={
+                    "subject_agent_id": agent_id
+                }
+            )
+            print(f"🔄 Background performance update completed for agent: {agent_id}")
+        else:
+            print(f"⚠️ Background update skipped - Agent not found for subject '{subject}'")
+    except Exception as e:
+        print(f"❌ Background performance update failed: {e}")
 
 def queryRouter(
     *,
@@ -104,20 +114,14 @@ def queryRouter(
         # Keep only last 10 raw messages
         context_store[payload.student_id] = session_context[-10:]
 
-        # ✅ ADD: Store conversation with performance tracking
-        student_manager.add_conversation(
-            student_id=payload.student_id,
-            subject=payload.subject,
-            query=payload.query,
-            response=response,
-            evaluation=evolution_scores,
-            quality_scores=evolution_scores,  # ✅ FIX: evolution_scores contains the quality metrics directly
-            feedback=evolution_scores.get("feedback", "like"),  # ✅ Default to "like" for successful chat interactions
-            confusion_type=evolution_scores.get("confusion_type", "NO_CONFUSION"),
-            additional_data={
-                "subject_agent_id": get_agent_id_for_subject(payload.subject)
-            }
+        # ✅ Start background performance update (non-blocking)
+        background_thread = threading.Thread(
+            target=update_performance_background,
+            args=(student_manager, payload.student_id, payload.subject, payload.query, response, evolution_scores),
+            daemon=True
         )
+        background_thread.start()
+        print(f"🚀 Performance update started in background for faster response")
 
         # 🔥 Incremental summary update (CHAT only)
         update_running_summary(

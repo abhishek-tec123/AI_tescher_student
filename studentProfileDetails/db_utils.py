@@ -397,17 +397,27 @@ class StudentManager:
         # Update agent performance if quality scores available
         # -------------------------------
         if quality_scores is not None and additional_data and additional_data.get("subject_agent_id"):
+            print(f"🔥 PERFORMANCE UPDATE TRIGGERED")
+            print(f"   - Agent ID: {additional_data['subject_agent_id']}")
+            print(f"   - Quality Scores: {quality_scores}")
+            print(f"   - Student ID: {student_id}")
             try:
                 from .agents.vector_performance_updater import update_vector_performance
-                update_vector_performance(
+                result = update_vector_performance(
                     subject_agent_id=additional_data["subject_agent_id"],
                     quality_scores=quality_scores,
                     feedback=feedback,
                     confusion_type=confusion_type,
                     student_id=student_id  # Pass student ID for tracking
                 )
+                print(f"   - Update Result: {result}")
             except Exception as e:
-                print(f"Error updating agent performance: {e}")
+                print(f"❌ Error updating agent performance: {e}")
+        else:
+            print(f"⚠️ PERFORMANCE UPDATE SKIPPED")
+            print(f"   - Quality Scores Present: {quality_scores is not None}")
+            print(f"   - Additional Data Present: {additional_data is not None}")
+            print(f"   - Agent ID Present: {additional_data.get('subject_agent_id') if additional_data else False}")
 
         # -------------------------------
         # Push conversation to history

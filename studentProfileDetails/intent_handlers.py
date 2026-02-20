@@ -7,6 +7,7 @@ from studentProfileDetails.agents.mainAgent import diagnosis_chat
 from studentProfileDetails.agents.quiz_generator import generate_quiz_from_history
 from studentProfileDetails.agents.studyPlane import generate_study_plan_with_subtopics
 from studentProfileDetails.agents.evaluation_agent import evaluate_response
+from studentProfileDetails.utils.agent_utils import get_dynamic_agent_id_for_subject  # ✅ Import dynamic agent ID mapping
 from studentProfileDetails.handle_general_cht import is_greeting, handle_greeting_chat, handle_general_chat_llm, is_general_chat
 # -------------------------------------------------
 # Main Chat Intent Handler
@@ -106,15 +107,33 @@ def handle_chat_intent(
     # -----------------------------------------
     # Store conversation
     # -----------------------------------------
-    conversation_id = student_manager.add_conversation(
-        student_id=payload.student_id,
-        subject=payload.subject,
-        query=payload.query,
-        response=response,
-        confusion_type=confusion_type,
-        evaluation=evaluation,
-        additional_data={"rl_metadata": rl_metadata}
-    )
+    agent_id = get_dynamic_agent_id_for_subject(student_manager, payload.student_id, payload.subject)
+    if agent_id:
+        conversation_id = student_manager.add_conversation(
+            student_id=payload.student_id,
+            subject=payload.subject,
+            query=payload.query,
+            response=response,
+            confusion_type=confusion_type,
+            evaluation=evaluation,
+            quality_scores=evaluation,  # ✅ Add quality_scores for performance tracking
+            feedback=evaluation.get("feedback", "like") if isinstance(evaluation, dict) else "like",  # ✅ Add feedback
+            additional_data={
+                "rl_metadata": rl_metadata,
+                "subject_agent_id": agent_id  # ✅ Use dynamic agent ID mapping
+            }
+        )
+    else:
+        conversation_id = student_manager.add_conversation(
+            student_id=payload.student_id,
+            subject=payload.subject,
+            query=payload.query,
+            response=response,
+            confusion_type=confusion_type,
+            evaluation=evaluation,
+            additional_data={"rl_metadata": rl_metadata}
+        )
+        print(f"⚠️ Agent not found for subject '{payload.subject}'. Performance tracking skipped.")
 
     # -----------------------------------------
     # Update progression AFTER conversation
