@@ -9,6 +9,8 @@ import os
 from datetime import datetime
 from pymongo import MongoClient
 from typing import Dict, Any
+from dotenv import load_dotenv
+load_dotenv()
 
 class VectorPerformanceUpdater:
     """Updates performance data in vector documents."""
@@ -385,12 +387,16 @@ class VectorPerformanceUpdater:
                     if doc:
                         performance = doc.get("performance", self._get_default_performance())
                         
-                        # Add agent metadata
+                        # Add agent metadata with class and subject info
                         agent_metadata = doc.get("agent_metadata", {})
                         
                         return {
                             "agent_id": subject_agent_id,
-                            "agent_metadata": agent_metadata,
+                            "agent_metadata": {
+                                "class": db_name,
+                                "subject": collection_name,
+                                "agent_metadata": agent_metadata
+                            },
                             **performance
                         }
             

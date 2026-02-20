@@ -5,6 +5,15 @@ from pymongo import MongoClient
 from bson import ObjectId
 import statistics
 from enum import Enum
+from dotenv import load_dotenv
+import logging
+
+# Import cache
+from routes.performance_cache import performance_cache
+
+load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 class PerformanceLevel(Enum):
     EXCELLENT = "Excellent"
@@ -15,7 +24,16 @@ class PerformanceLevel(Enum):
 
 class AgentPerformanceMonitor:
     def __init__(self):
-        self.client = MongoClient(os.environ.get("MONGODB_URI"))
+        self.client = MongoClient(
+            os.environ.get("MONGODB_URI"),
+            maxPoolSize=50,  # Connection pooling
+            minPoolSize=5,
+            maxIdleTimeMS=30000,
+            serverSelectionTimeoutMS=5000,
+            connectTimeoutMS=5000,
+            retryWrites=True,
+            w="majority"
+        )
         self.db = self.client["teacher_ai"]
         self.students_collection = self.db["students"]
         self.performance_collection = self.db["agent_performance_logs"]
@@ -24,6 +42,84 @@ class AgentPerformanceMonitor:
         # Import vector performance updater
         from .vector_performance_updater import VectorPerformanceUpdater
         self.vector_updater = VectorPerformanceUpdater()
+        
+        # Cache for agent registry to avoid repeated database scans
+        self._agent_registry_cache = None
+        self._cache_timestamp = None
+        self._cache_ttl = 300  # 5 minutes cache
+    
+    def _build_agent_registry(self) -> Dict[str, Dict[str, Any]]:
+        """Build and cache agent registry from vector databases."""
+        current_time = datetime.utcnow().timestamp()
+        
+        # Try to get from Redis cache first
+        cached_registry = performance_cache.get_agent_registry()
+        if cached_registry:
+            return cached_registry
+        
+        # Return cached data if still valid
+        if (self._agent_registry_cache and self._cache_timestamp and 
+            current_time - self._cache_timestamp < self._cache_ttl):
+            return self._agent_registry_cache
+        
+        # Build fresh registry with optimized queries
+        agent_registry = {}
+        
+        try:
+            # Get all databases at once
+            db_names = [db for db in self.client.list_database_names() 
+                       if db not in ["admin", "local", "config", "teacher_ai"]]
+            
+            for db_name in db_names:
+                db = self.client[db_name]
+                
+                # Get all collections at once
+                collection_names = db.list_collection_names()
+                
+                for collection_name in collection_names:
+                    collection = db[collection_name]
+                    
+                    # Use optimized aggregation with indexes
+                    pipeline = [
+                        {"$match": {"subject_agent_id": {"$exists": True, "$ne": None}}},
+                        {"$group": {
+                            "_id": "$subject_agent_id",
+                            "db_name": {"$first": db_name},
+                            "collection_name": {"$first": collection_name},
+                            "agent_metadata": {"$first": "$agent_metadata"},
+                            "performance": {"$first": "$performance"},
+                            "doc_count": {"$sum": 1}
+                        }},
+                        {"$sort": {"doc_count": -1}}  # Most active agents first
+                    ]
+                    
+                    results = list(collection.aggregate(pipeline, allowDiskUse=True))
+                    
+                    for result in results:
+                        agent_id = result["_id"]
+                        if agent_id and isinstance(agent_id, str):
+                            agent_registry[agent_id] = {
+                                "db_name": result["db_name"],
+                                "collection_name": result["collection_name"],
+                                "agent_metadata": result["agent_metadata"],
+                                "performance": result["performance"],
+                                "document_count": result["doc_count"]
+                            }
+            
+            # Update both local cache and Redis
+            self._agent_registry_cache = agent_registry
+            self._cache_timestamp = current_time
+            performance_cache.set_agent_registry(agent_registry, ttl=self._cache_ttl)
+            
+            logger.info(f"Built agent registry with {len(agent_registry)} agents")
+            
+        except Exception as e:
+            logger.error(f"Error building agent registry: {e}")
+            # Return cached data if available, even if expired
+            if self._agent_registry_cache:
+                return self._agent_registry_cache
+        
+        return agent_registry
         
     def create_agent_performance_summary(self, subject_agent_id: str, agent_metadata: dict) -> bool:
         """Create initial performance summary for a new agent."""
@@ -192,32 +288,51 @@ class AgentPerformanceMonitor:
     
     def get_agent_performance_metrics(self, subject_agent_id: str, days: int = 30) -> Dict[str, Any]:
         """Get comprehensive performance metrics for a specific agent."""
+        # Try to get from cache first
+        cached_data = performance_cache.get_agent_performance(subject_agent_id, days)
+        if cached_data:
+            return cached_data
+        
         end_date = datetime.utcnow()
         start_date = end_date - timedelta(days=days)
         
         # Find all conversations for this agent across all students
-        pipeline = [
-            {"$unwind": {"path": "$conversation_history", "preserveNullAndEmptyArrays": False}},
-            {"$match": {
-                "conversation_history.timestamp": {"$gte": start_date, "$lte": end_date}
-            }},
-            {"$group": {
-                "_id": "$conversation_history.subject_agent_id",
-                "conversations": {"$push": "$conversation_history"}
-            }}
-        ]
-        
         agent_conversations = []
-        for subject in self.students_collection.find():
-            if "conversation_history" in subject:
-                for subj_name, conversations in subject["conversation_history"].items():
-                    for conv in conversations:
-                        if conv.get("subject_agent_id") == subject_agent_id:
-                            if "timestamp" in conv and conv["timestamp"] >= start_date:
-                                agent_conversations.append(conv)
+        
+        try:
+            # Use optimized query with proper indexing
+            pipeline = [
+                {"$unwind": {"path": "$conversation_history", "preserveNullAndEmptyArrays": False}},
+                {"$match": {
+                    "conversation_history.subject_agent_id": subject_agent_id,
+                    "conversation_history.timestamp": {"$gte": start_date, "$lte": end_date}
+                }},
+                {"project": {
+                    "conversation": "$conversation_history"
+                }}
+            ]
+            
+            results = list(self.students_collection.aggregate(pipeline, allowDiskUse=True))
+            agent_conversations = [result["conversation"] for result in results]
+            
+        except Exception as e:
+            logger.error(f"Error querying conversations for agent {subject_agent_id}: {e}")
+            # Fallback to manual iteration if aggregation fails
+            for subject in self.students_collection.find({
+                "conversation_history": {"$exists": True}
+            }):
+                if "conversation_history" in subject:
+                    for subj_name, conversations in subject["conversation_history"].items():
+                        for conv in conversations:
+                            if conv.get("subject_agent_id") == subject_agent_id:
+                                if "timestamp" in conv and conv["timestamp"] >= start_date:
+                                    agent_conversations.append(conv)
         
         if not agent_conversations:
-            return self._get_empty_performance_report(subject_agent_id)
+            empty_report = self._get_empty_performance_report(subject_agent_id)
+            # Cache empty results for shorter time
+            performance_cache.set_agent_performance(subject_agent_id, days, empty_report, ttl=60)
+            return empty_report
         
         # Calculate metrics
         metrics = self._calculate_metrics(agent_conversations)
@@ -241,6 +356,9 @@ class AgentPerformanceMonitor:
         
         # Store performance log
         self._store_performance_log(performance_report)
+        
+        # Cache the results
+        performance_cache.set_agent_performance(subject_agent_id, days, performance_report)
         
         return performance_report
     
@@ -476,35 +594,86 @@ class AgentPerformanceMonitor:
         }
     
     def get_all_agents_overview(self, days: int = 30) -> List[Dict[str, Any]]:
-        """Get performance overview for all agents."""
-        # Get all unique agent IDs
-        agent_ids = set()
+        """Get performance overview for all agents from cached registry."""
+        import time
+        start_time = time.time()
+        print(f"🚀 Starting get_all_agents_overview for {days} days")
         
-        for subject in self.students_collection.find():
-            if "conversation_history" in subject:
-                for conversations in subject["conversation_history"].values():
-                    for conv in conversations:
-                        if "subject_agent_id" in conv:
-                            agent_ids.add(conv["subject_agent_id"])
+        # Try to get from cache first
+        cached_overview = performance_cache.get_agent_overview(days)
+        if cached_overview:
+            elapsed = (time.time() - start_time) * 1000
+            print(f"⚡ Cache HIT! Returned in {elapsed:.2f}ms")
+            return cached_overview
         
-        # Get performance for each agent
+        print("📦 Cache miss - building fresh overview...")
+        cache_start = time.time()
+        
+        # Get agent registry from cache
+        agent_registry = self._build_agent_registry()
+        registry_time = (time.time() - cache_start) * 1000
+        print(f"📋 Agent registry built in {registry_time:.2f}ms ({len(agent_registry)} agents)")
+        
+        # Build overview from cached registry
+        build_start = time.time()
         overview = []
-        for agent_id in agent_ids:
-            performance = self.get_agent_performance_metrics(agent_id, days)
+        for agent_id, agent_info in agent_registry.items():
+            performance = agent_info.get("performance")
+            
+            # Use cached performance data if available, otherwise get default
+            if performance:
+                metrics = performance.get("metrics", {})
+                performance_level = performance.get("performance_level", "Critical")
+                health_status = performance.get("health_indicators", {}).get("quality_health", {}).get("status", "Critical")
+                last_updated = performance.get("last_updated", datetime.utcnow().isoformat())
+            else:
+                # Fallback to default values
+                metrics = {
+                    "overall_score": 0,
+                    "pedagogical_value": 0,
+                    "critical_confidence": 0,
+                    "rag_relevance": 0,
+                    "answer_completeness": 0,
+                    "hallucination_risk": 0
+                }
+                performance_level = "Critical"
+                health_status = "Critical"
+                last_updated = datetime.utcnow().isoformat()
+            
+            # Handle both enum and string types
+            if hasattr(performance_level, 'value'):
+                performance_level = performance_level.value
+            else:
+                performance_level = str(performance_level)
+            
             overview.append({
                 "agent_id": agent_id,
-                "agent_name": performance["agent_metadata"].get("agent_metadata", {}).get("agent_name", "Unknown"),
-                "class_name": performance["agent_metadata"].get("class", "Unknown"),
-                "subject": performance["agent_metadata"].get("subject", "Unknown"),
-                "overall_score": performance["metrics"]["overall_score"],
-                "performance_level": performance["performance_level"].value,
-                "total_conversations": performance["total_conversations"],
-                "health_status": performance["health_indicators"]["quality_health"]["status"],
-                "last_updated": performance["last_updated"]
+                "agent_name": agent_info["agent_metadata"].get("agent_name", "Unknown"),
+                "class_name": agent_info["db_name"],
+                "subject": agent_info["collection_name"],
+                "overall_score": metrics.get("overall_score", 0),
+                "performance_level": performance_level,
+                "total_conversations": performance.get("total_conversations", 0) if performance else 0,
+                "health_status": health_status,
+                "last_updated": last_updated,
+                "document_count": agent_info.get("document_count", 0)
             })
         
-        # Sort by overall score
-        overview.sort(key=lambda x: x["overall_score"], reverse=True)
+        # Sort by overall score, then by document count
+        overview.sort(key=lambda x: (x["overall_score"], x["document_count"]), reverse=True)
+        
+        build_time = (time.time() - build_start) * 1000
+        print(f"🏗️  Overview built in {build_time:.2f}ms")
+        
+        # Cache results
+        cache_set_start = time.time()
+        performance_cache.set_agent_overview(days, overview)
+        cache_set_time = (time.time() - cache_set_start) * 1000
+        print(f"💾 Results cached in {cache_set_time:.2f}ms")
+        
+        total_time = (time.time() - start_time) * 1000
+        print(f"✅ Total get_all_agents_overview time: {total_time:.2f}ms")
+        
         return overview
     
     def get_agents_needing_attention(self, threshold_score: float = 60) -> List[Dict[str, Any]]:

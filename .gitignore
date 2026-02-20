@@ -8,5 +8,5 @@ __pycache__/
 *.pyc
 data/
 cheking/
-test_*.py
-policy_weights.json
+get-pip.py
+embeddings.json

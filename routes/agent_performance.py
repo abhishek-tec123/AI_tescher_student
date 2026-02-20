@@ -1,33 +1,67 @@
-from fastapi import APIRouter, HTTPException, Query
-from typing import List, Optional
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Query, Depends, status
+from typing import List
+from pydantic import BaseModel, Field, validator
 from datetime import datetime
 from studentProfileDetails.agents.agent_performance_monitor import AgentPerformanceMonitor
+from studentProfileDetails.auth.dependencies import get_current_user, require_role, require_any_role, require_permission
+import logging
 
-router = APIRouter(prefix="/agent-performance", tags=["agent-performance"])
+logger = logging.getLogger(__name__)
+
+router = APIRouter(tags=["agent-performance"])
+
+
+# ================================
+# RESPONSE MODELS
+# ================================
 
 class PerformanceResponse(BaseModel):
-    agent_id: str
+    agent_id: str = Field(..., min_length=1, max_length=100)
     agent_metadata: dict
     performance_period: str
-    total_conversations: int
+    total_conversations: int = Field(..., ge=0)
     metrics: dict
     performance_level: str
     health_indicators: dict
     trend_analysis: dict
     recommendations: List[str]
     last_updated: str
+    
+    @validator('agent_id')
+    def validate_agent_id(cls, v):
+        if not v or v.strip() == '':
+            raise ValueError('Agent ID cannot be empty')
+        return v.strip()
+    
+    @validator('performance_level')
+    def validate_performance_level(cls, v):
+        valid_levels = ['Excellent', 'Good', 'Average', 'Poor', 'Critical']
+        if v not in valid_levels:
+            raise ValueError(f'Performance level must be one of: {valid_levels}')
+        return v
+
 
 class AgentOverviewResponse(BaseModel):
-    agent_id: str
-    agent_name: str
-    class_name: str
-    subject: str
-    overall_score: float
+    agent_id: str = Field(..., min_length=1, max_length=100)
+    agent_name: str = Field(..., min_length=1, max_length=200)
+    class_name: str = Field(..., min_length=1, max_length=100)
+    subject: str = Field(..., min_length=1, max_length=100)
+    overall_score: float = Field(..., ge=0, le=100)
     performance_level: str
-    total_conversations: int
+    total_conversations: int = Field(..., ge=0)
     health_status: str
     last_updated: str
+    
+    @validator('agent_id', 'agent_name', 'class_name', 'subject')
+    def validate_non_empty_fields(cls, v):
+        if not v or v.strip() == '':
+            raise ValueError('Field cannot be empty')
+        return v.strip()
+
+
+class AgentOverviewWithCountResponse(BaseModel):
+    agents: List[AgentOverviewResponse]
+    total_agents: int
 
 class HealthCheckResponse(BaseModel):
     critical_agents: List[AgentOverviewResponse]
@@ -36,251 +70,119 @@ class HealthCheckResponse(BaseModel):
     alert_summary: dict
     last_checked: str
 
-@router.get("/{agent_id}", response_model=PerformanceResponse)
-async def get_agent_performance(
-    agent_id: str,
-    days: int = Query(default=30, ge=1, le=365, description="Number of days to analyze")
-):
-    """
-    Get detailed performance metrics for a specific agent.
-    
-    - **agent_id**: The subject_agent_id of the agent
-    - **days**: Number of days to analyze (1-365)
-    
-    Returns comprehensive performance analysis including:
-    - Quality scores (pedagogical value, confidence, relevance, completeness)
-    - Hallucination risk assessment
-    - Student satisfaction metrics
-    - Health indicators with color-coded status
-    - Performance trends over time
-    - Actionable recommendations
-    """
-    try:
-        monitor = AgentPerformanceMonitor()
-        performance_data = monitor.get_agent_performance_metrics(agent_id, days)
-        
-        return PerformanceResponse(**performance_data)
-        
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error retrieving agent performance: {str(e)}"
-        )
 
-@router.get("/overview", response_model=List[AgentOverviewResponse])
+# ================================
+# STATIC ROUTES FIRST
+# ================================
+
+@router.get("/overview", response_model=AgentOverviewWithCountResponse)
 async def get_all_agents_overview(
-    days: int = Query(default=30, ge=1, le=365, description="Number of days to analyze")
+    days: int = Query(default=30, ge=1, le=365, description="Number of days to look back for performance data"),
+    current_user: dict = Depends(require_any_role(["admin", "teacher"]))
 ):
-    """
-    Get performance overview for all agents.
+    """Get performance overview for all agents.
     
-    - **days**: Number of days to analyze (1-365)
+    Args:
+        days: Number of days to look back for performance data (1-365)
+        current_user: Authenticated user with admin or teacher role
+        
+    Returns:
+        List of agents with their performance overview
     
-    Returns a summary of all agents including:
-    - Agent ID, name, class, and subject
-    - Overall performance score
-    - Performance level (Excellent, Good, Average, Poor, Critical)
-    - Total conversation count
-    - Health status
-    - Last update timestamp
-    
-    Sorted by overall score (highest first).
+    Raises:
+        HTTPException: If authentication fails or data retrieval fails
     """
     try:
+        logger.info(f"User {current_user.get('user_id')} requesting agent overview for {days} days")
+        
         monitor = AgentPerformanceMonitor()
         overview_data = monitor.get_all_agents_overview(days)
         
-        return [AgentOverviewResponse(**agent) for agent in overview_data]
+        if not overview_data:
+            logger.warning("No agent data found")
+            return AgentOverviewWithCountResponse(
+                agents=[],
+                total_agents=0
+            )
         
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error retrieving agents overview: {str(e)}"
+        agents = [AgentOverviewResponse(**agent) for agent in overview_data]
+        logger.info(f"Retrieved {len(agents)} agents overview")
+        
+        return AgentOverviewWithCountResponse(
+            agents=agents,
+            total_agents=len(agents)
         )
+        
+    except ValueError as e:
+        logger.error(f"Validation error in get_all_agents_overview: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid request parameters: {str(e)}"
+        )
+    except Exception as e:
+        logger.error(f"Unexpected error in get_all_agents_overview: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve agent performance overview"
+        )
+
 
 @router.get("/health-check", response_model=HealthCheckResponse)
 async def get_health_check(
-    threshold_score: float = Query(default=60, ge=0, le=100, description="Performance threshold for alerts")
+    threshold_score: float = Query(default=60, ge=0, le=100),
+    current_user: dict = Depends(require_any_role(["admin", "teacher"]))
 ):
-    """
-    Get health check for all agents needing attention.
-    
-    - **threshold_score**: Performance score threshold (0-100)
-    
-    Returns:
-    - List of critical agents (below threshold)
-    - Total agent count and critical count
-    - Alert summary by performance level
-    - Last check timestamp
-    
-    Useful for monitoring and alerting systems.
-    """
     try:
         monitor = AgentPerformanceMonitor()
         critical_agents = monitor.get_agents_needing_attention(threshold_score)
         all_agents = monitor.get_all_agents_overview()
-        
-        # Generate alert summary
+
         alert_summary = {}
         for agent in all_agents:
             level = agent["performance_level"]
             alert_summary[level] = alert_summary.get(level, 0) + 1
-        
-        health_check_data = {
-            "critical_agents": [AgentOverviewResponse(**agent) for agent in critical_agents],
-            "total_agents": len(all_agents),
-            "critical_count": len(critical_agents),
-            "alert_summary": alert_summary,
-            "last_checked": datetime.utcnow().isoformat()
-        }
-        
-        return HealthCheckResponse(**health_check_data)
-        
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error performing health check: {str(e)}"
+
+        return HealthCheckResponse(
+            critical_agents=[AgentOverviewResponse(**a) for a in critical_agents],
+            total_agents=len(all_agents),
+            critical_count=len(critical_agents),
+            alert_summary=alert_summary,
+            last_checked=datetime.utcnow().isoformat()
         )
 
-@router.get("/trends/{agent_id}")
-async def get_agent_trends(
-    agent_id: str,
-    days: int = Query(default=30, ge=7, le=365, description="Number of days to analyze")
-):
-    """
-    Get detailed trend analysis for a specific agent.
-    
-    - **agent_id**: The subject_agent_id of the agent
-    - **days**: Number of days to analyze (7-365)
-    
-    Returns detailed trend data including:
-    - Performance direction (up/down/stable)
-    - Score changes over time
-    - Period-by-period comparison
-    - Trend visualization data
-    """
-    try:
-        monitor = AgentPerformanceMonitor()
-        performance_data = monitor.get_agent_performance_metrics(agent_id, days)
-        
-        return {
-            "agent_id": agent_id,
-            "trend_analysis": performance_data["trend_analysis"],
-            "performance_history": performance_data["metrics"],
-            "recommendations": performance_data["recommendations"],
-            "analysis_period": f"Last {days} days"
-        }
-        
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error retrieving agent trends: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/compare")
-async def compare_agents(
-    agent_ids: List[str] = Query(description="List of agent IDs to compare"),
-    days: int = Query(default=30, ge=1, le=365, description="Number of days to analyze")
-):
-    """
-    Compare performance metrics between multiple agents.
-    
-    - **agent_ids**: List of subject_agent_ids to compare
-    - **days**: Number of days to analyze (1-365)
-    
-    Returns side-by-side comparison including:
-    - Performance metrics for each agent
-    - Relative rankings
-    - Strengths and weaknesses analysis
-    - Comparative insights
-    """
-    try:
-        if len(agent_ids) < 2:
-            raise HTTPException(
-                status_code=400,
-                detail="At least 2 agent IDs required for comparison"
-            )
-        
-        monitor = AgentPerformanceMonitor()
-        comparison_data = []
-        
-        for agent_id in agent_ids:
-            performance = monitor.get_agent_performance_metrics(agent_id, days)
-            comparison_data.append({
-                "agent_id": agent_id,
-                "agent_name": performance["agent_metadata"].get("agent_metadata", {}).get("agent_name", "Unknown"),
-                "class_name": performance["agent_metadata"].get("class", "Unknown"),
-                "subject": performance["agent_metadata"].get("subject", "Unknown"),
-                "overall_score": performance["metrics"]["overall_score"],
-                "performance_level": performance["performance_level"].value,
-                "metrics": performance["metrics"],
-                "health_indicators": performance["health_indicators"]
-            })
-        
-        # Sort by overall score for ranking
-        comparison_data.sort(key=lambda x: x["overall_score"], reverse=True)
-        
-        # Add rankings
-        for i, agent in enumerate(comparison_data, 1):
-            agent["rank"] = i
-        
-        return {
-            "comparison_period": f"Last {days} days",
-            "agents_compared": len(agent_ids),
-            "comparison_data": comparison_data,
-            "best_performer": comparison_data[0] if comparison_data else None,
-            "worst_performer": comparison_data[-1] if comparison_data else None
-        }
-        
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error comparing agents: {str(e)}"
-        )
 
 @router.get("/metrics/summary")
 async def get_metrics_summary(
-    days: int = Query(default=30, ge=1, le=365, description="Number of days to analyze")
+    days: int = Query(default=30, ge=1, le=365),
+    current_user: dict = Depends(require_any_role(["admin", "teacher"]))
 ):
-    """
-    Get aggregated metrics summary across all agents.
-    
-    - **days**: Number of days to analyze (1-365)
-    
-    Returns system-wide metrics including:
-    - Average performance scores
-    - Performance distribution
-    - Total conversations
-    - Health statistics
-    - System-wide trends
-    """
     try:
         monitor = AgentPerformanceMonitor()
         all_agents = monitor.get_all_agents_overview(days)
-        
+
         if not all_agents:
             return {
                 "message": "No agent data available",
                 "period": f"Last {days} days",
                 "total_agents": 0
             }
-        
-        # Calculate aggregates
-        total_conversations = sum(agent["total_conversations"] for agent in all_agents)
-        avg_score = sum(agent["overall_score"] for agent in all_agents) / len(all_agents)
-        
-        # Performance distribution
+
+        total_conversations = sum(a["total_conversations"] for a in all_agents)
+        avg_score = sum(a["overall_score"] for a in all_agents) / len(all_agents)
+
         performance_levels = {}
         for agent in all_agents:
             level = agent["performance_level"]
             performance_levels[level] = performance_levels.get(level, 0) + 1
-        
-        # Health distribution
+
         health_distribution = {}
         for agent in all_agents:
             health = agent["health_status"]
             health_distribution[health] = health_distribution.get(health, 0) + 1
-        
+
         return {
             "period": f"Last {days} days",
             "total_agents": len(all_agents),
@@ -288,12 +190,91 @@ async def get_metrics_summary(
             "average_score": round(avg_score, 1),
             "performance_distribution": performance_levels,
             "health_distribution": health_distribution,
-            "top_performers": all_agents[:3],
+            "top_performers": all_agents[:5],
             "agents_needing_attention": len([a for a in all_agents if a["overall_score"] < 60])
         }
-        
+
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ================================
+# DYNAMIC ROUTES (NAMESPACED)
+# ================================
+
+@router.get("/agent/{agent_id}", response_model=PerformanceResponse)
+async def get_agent_performance(
+    agent_id: str,
+    days: int = Query(default=30, ge=1, le=365, description="Number of days to look back for performance data"),
+    current_user: dict = Depends(require_any_role(["admin", "teacher"]))
+):
+    """Get detailed performance metrics for a specific agent.
+    
+    Args:
+        agent_id: Unique identifier for the agent
+        days: Number of days to look back for performance data (1-365)
+        current_user: Authenticated user with admin or teacher role
+        
+    Returns:
+        Detailed performance metrics for the specified agent
+        
+    Raises:
+        HTTPException: If agent not found, authentication fails, or data retrieval fails
+    """
+    try:
+        # Validate agent_id
+        if not agent_id or agent_id.strip() == '':
+            raise ValueError("Agent ID cannot be empty")
+        
+        agent_id = agent_id.strip()
+        logger.info(f"User {current_user.get('user_id')} requesting performance for agent {agent_id}")
+        
+        monitor = AgentPerformanceMonitor()
+        performance_data = monitor.get_agent_performance_metrics(agent_id, days)
+        
+        if not performance_data:
+            logger.warning(f"No performance data found for agent {agent_id}")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No performance data found for agent {agent_id}"
+            )
+        
+        logger.info(f"Retrieved performance data for agent {agent_id}")
+        return PerformanceResponse(**performance_data)
+        
+    except ValueError as e:
+        logger.error(f"Validation error in get_agent_performance: {e}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Error retrieving metrics summary: {str(e)}"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid request parameters: {str(e)}"
         )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in get_agent_performance: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve agent performance data"
+        )
+
+
+@router.get("/agent/{agent_id}/trends")
+async def get_agent_trends(
+    agent_id: str,
+    days: int = Query(default=30, ge=7, le=365),
+    current_user: dict = Depends(require_any_role(["admin", "teacher"]))
+):
+    try:
+        monitor = AgentPerformanceMonitor()
+        performance_data = monitor.get_agent_performance_metrics(agent_id, days)
+
+        return {
+            "agent_id": agent_id,
+            "trend_analysis": performance_data["trend_analysis"],
+            "performance_history": performance_data["metrics"],
+            "recommendations": performance_data["recommendations"],
+            "analysis_period": f"Last {days} days"
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
