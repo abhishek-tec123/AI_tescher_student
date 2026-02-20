@@ -73,6 +73,7 @@ def handle_chat_intent(
 
     response = chat["response"]
     confusion_type = chat.get("confusion_type")
+    rl_metadata = chat.get("rl_metadata", {})
 
     # -----------------------------------------
     # Evaluate academic response
@@ -112,6 +113,7 @@ def handle_chat_intent(
         response=response,
         confusion_type=confusion_type,
         evaluation=evaluation,
+        additional_data={"rl_metadata": rl_metadata}
     )
 
     # -----------------------------------------
