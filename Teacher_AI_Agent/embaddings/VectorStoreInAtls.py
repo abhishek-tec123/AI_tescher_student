@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+from datetime import datetime
 from typing import List
 from dotenv import load_dotenv
 from pymongo import MongoClient, UpdateOne
@@ -112,11 +113,66 @@ def create_vector_and_store_in_atlas(
 
     for entry in vector:
         entry["subject_agent_id"] = subject_agent_id
+    
     # ✅ Attach agent metadata safely
     if agent_metadata:
         logger.info(f"Attaching agent metadata: {agent_metadata}")
         for entry in vector:
             entry["agent_metadata"] = agent_metadata
+    
+    # ✅ NEW: Add performance tracking key to each entry
+    performance_data = {
+        "performance_period": "Last 30 days",
+        "total_conversations": 0,
+        "unique_students": 0,
+        "student_usage": {
+            "total_students": 0,
+            "student_ids": [],
+            "conversation_per_student": {},
+            "student_performance": {}
+        },
+        "metrics": {
+            "pedagogical_value": 0,
+            "critical_confidence": 0,
+            "rag_relevance": 0,
+            "answer_completeness": 0,
+            "hallucination_risk": 0,
+            "overall_score": 0,
+            "satisfaction_rate": 0,
+            "feedback_counts": {
+                "like": 0,
+                "dislike": 0,
+                "neutral": 0
+            },
+            "confusion_distribution": {}
+        },
+        "performance_level": "Critical",
+        "health_indicators": {
+            "quality_health": {
+                "status": "No Data",
+                "color": "gray"
+            },
+            "hallucination_health": {
+                "status": "No Data",
+                "color": "gray"
+            },
+            "satisfaction_health": {
+                "status": "No Data",
+                "color": "gray"
+            }
+        },
+        "trend_analysis": {
+            "trend": "No Data",
+            "direction": "neutral"
+        },
+        "recommendations": [
+            "Agent has no conversation data - needs testing and deployment"
+        ],
+        "last_updated": datetime.utcnow().isoformat()
+    }
+    
+    for entry in vector:
+        entry["performance"] = performance_data
 
     collection, used_collection_name = get_mongo_collection(db_name, collection_name)
 
@@ -148,6 +204,28 @@ def create_vector_and_store_in_atlas(
 
     logger.info("Summary of operation:")
     logger.info(json.dumps(summary, indent=2, ensure_ascii=False))
+
+    # ✅ NEW: Create agent performance summary when new agent is created
+    if subject_agent_id:
+        try:
+            from studentProfileDetails.agents.agent_performance_monitor import AgentPerformanceMonitor
+            
+            monitor = AgentPerformanceMonitor()
+            agent_metadata_for_performance = {
+                "class": db_name,
+                "subject": collection_name,
+                "agent_metadata": agent_metadata or {},
+                "document_count": len(vector)
+            }
+            
+            success = monitor.create_agent_performance_summary(subject_agent_id, agent_metadata_for_performance)
+            if success:
+                logger.info(f"✅ Created agent performance summary for {subject_agent_id}")
+            else:
+                logger.warning(f"⚠️ Failed to create agent performance summary for {subject_agent_id}")
+                
+        except Exception as e:
+            logger.error(f"❌ Error creating agent performance summary: {e}")
 
     return summary
 

@@ -394,6 +394,22 @@ class StudentManager:
             conversation_doc.update(additional_data)
 
         # -------------------------------
+        # Update agent performance if quality scores available
+        # -------------------------------
+        if quality_scores is not None and additional_data and additional_data.get("subject_agent_id"):
+            try:
+                from .agents.vector_performance_updater import update_vector_performance
+                update_vector_performance(
+                    subject_agent_id=additional_data["subject_agent_id"],
+                    quality_scores=quality_scores,
+                    feedback=feedback,
+                    confusion_type=confusion_type,
+                    student_id=student_id  # Pass student ID for tracking
+                )
+            except Exception as e:
+                print(f"Error updating agent performance: {e}")
+
+        # -------------------------------
         # Push conversation to history
         # -------------------------------
         self.students.update_one(

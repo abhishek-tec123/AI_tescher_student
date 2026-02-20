@@ -9,6 +9,21 @@ from studentProfileDetails.summrizeStdConv import update_running_summary
 import time
 
 
+def get_agent_id_for_subject(subject: str) -> str:
+    """Get agent_id for a given subject."""
+    # Simple mapping based on common agent naming convention
+    subject_agent_mapping = {
+        "Science": "agent_K3GVB",
+        "Mathematics": "agent_MATH_001", 
+        "Physics": "agent_PHYSICS_001",
+        "Chemistry": "agent_CHEM_001",
+        "Biology": "agent_BIO_001",
+        "History": "agent_HIST_001",
+        "English": "agent_ENG_001"
+    }
+    
+    return subject_agent_mapping.get(subject, f"agent_{subject.upper()}_001")
+
 def queryRouter(
     *,
     payload,
@@ -19,6 +34,7 @@ def queryRouter(
 
     conversation_id = None  # ✅ local variable (thread-safe)
     context_summary = None
+    evolution_scores = {}
 
     # Ensure student exists
     if not student_manager.students.find_one({"student_id": payload.student_id}):
@@ -74,17 +90,34 @@ def queryRouter(
 
         response = result["response"]
         conversation_id = result.get("conversation_id")
+        evolution_scores = result.get("evaluation", {})
 
         new_entry = {
             "conversation_id": str(conversation_id) if conversation_id else None,
             "query": payload.query,
-            "response": response
+            "response": response,
+            "evolution": evolution_scores
         }
 
         session_context.append(new_entry)
 
         # Keep only last 10 raw messages
         context_store[payload.student_id] = session_context[-10:]
+
+        # ✅ ADD: Store conversation with performance tracking
+        student_manager.add_conversation(
+            student_id=payload.student_id,
+            subject=payload.subject,
+            query=payload.query,
+            response=response,
+            evaluation=evolution_scores,
+            quality_scores=evolution_scores,  # ✅ FIX: evolution_scores contains the quality metrics directly
+            feedback=evolution_scores.get("feedback", "like"),  # ✅ Default to "like" for successful chat interactions
+            confusion_type=evolution_scores.get("confusion_type", "NO_CONFUSION"),
+            additional_data={
+                "subject_agent_id": get_agent_id_for_subject(payload.subject)
+            }
+        )
 
         # 🔥 Incremental summary update (CHAT only)
         update_running_summary(
@@ -111,7 +144,8 @@ def queryRouter(
         for item in stored_history:
             formatted_stored_history.append({
                 "query": item.get("query", ""),
-                "response": item.get("response", "")
+                "response": item.get("response", ""),
+                "evolution": item.get("evaluation", {})
             })
         
         # Combine session context (most recent) with stored history
@@ -207,7 +241,8 @@ def queryRouter(
         for item in stored_history:
             formatted_stored_history.append({
                 "query": item.get("query", ""),
-                "response": item.get("response", "")
+                "response": item.get("response", ""),
+                "evolution": item.get("evaluation", {})
             })
         
         # Combine session context (most recent) with stored history
@@ -266,6 +301,7 @@ def queryRouter(
             "query": payload.query,
             "response": response,
             "conversation_id": str(conversation_id) if conversation_id else None,
+            "evolution": evolution_scores,
             "context_history": context_store[payload.student_id],
             "context_summary": context_summary
         }
