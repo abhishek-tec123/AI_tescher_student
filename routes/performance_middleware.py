@@ -122,9 +122,9 @@ class PerformanceMonitoringMiddleware(BaseHTTPMiddleware):
         
         # Rate limit settings
         self.rate_limits = {
-            "admin": {"requests": 100, "window": 60},  # 100 requests per minute
-            "teacher": {"requests": 50, "window": 60},  # 50 requests per minute
-            "default": {"requests": 20, "window": 60}   # 20 requests per minute
+            "admin": {"requests": 120, "window": 60},  # 100 requests per minute
+            "teacher": {"requests": 120, "window": 60},  # 50 requests per minute
+            "default": {"requests": 300, "window": 60}   # 20 requests per minute
         }
     
     async def dispatch(self, request: Request, call_next):
@@ -147,12 +147,14 @@ class PerformanceMonitoringMiddleware(BaseHTTPMiddleware):
             rate_config["requests"],
             rate_config["window"]
         )
-        
+        from fastapi.responses import JSONResponse
+
         if not allowed:
             logger.warning(f"Rate limit exceeded for {rate_limit_key}")
-            raise HTTPException(
+
+            return JSONResponse(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail={
+                content={
                     "error": "Rate limit exceeded",
                     "limit": rate_info["limit"],
                     "window": rate_config["window"],

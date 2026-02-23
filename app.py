@@ -11,9 +11,13 @@ app = FastAPI(title="Student Learning API")
 
 app.state.create_vectors_service = create_vectors_service
 
+origins = [
+    "https://tecorb.in",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
