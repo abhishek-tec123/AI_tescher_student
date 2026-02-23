@@ -83,7 +83,8 @@ class RetrievalOrchestratorAgent:
         query: str,
         db_name: str,
         collection_name: str,
-        student_profile: Optional[dict] = None  # user can pass dict or None
+        student_profile: Optional[dict] = None,  # user can pass dict or None
+        top_k: int = 10
     ) -> str:
 
         # Validate profile
@@ -109,7 +110,8 @@ class RetrievalOrchestratorAgent:
                 db_name=db_name,
                 collection_name=collection_name,
                 embedding_model=self.embedding_model,
-                student_profile=profile.dict()  # send as dict to similarity_search/groq
+                student_profile=profile.dict(),  # send as dict to similarity_search/groq
+                top_k=top_k
             )
             return result  # {"response": str, "quality_scores": dict}
         except Exception as e:

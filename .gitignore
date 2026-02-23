@@ -7,4 +7,6 @@ node_modules/
 __pycache__/
 *.pyc
 data/
-checking/
+cheking/
+get-pip.py
+embeddings.json

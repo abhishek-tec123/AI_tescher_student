@@ -59,6 +59,8 @@ INSTRUCTIONS:
 - Include examples that might clarify confusion points from conversations
 - Structure points logically based on how the student learned the topic
 - Keep explanations simple but thorough
+- FORMATTING: Use `**Header**: *Explanation text*` on the same line for all points.
+- CRITICAL: Use Unicode subscripts (₀₁₂₃₄₅₆₇₈₉) and superscripts (⁰¹²³⁴⁵⁶⁷⁸⁹) for ALL scientific notation (e.g., H₂O, x², vᵢ).
 """
 
     response = summarize_text_with_groq(

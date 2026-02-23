@@ -394,6 +394,32 @@ class StudentManager:
             conversation_doc.update(additional_data)
 
         # -------------------------------
+        # Update agent performance if quality scores available
+        # -------------------------------
+        if quality_scores is not None and additional_data and additional_data.get("subject_agent_id"):
+            print(f"🔥 PERFORMANCE UPDATE TRIGGERED")
+            print(f"   - Agent ID: {additional_data['subject_agent_id']}")
+            print(f"   - Quality Scores: {quality_scores}")
+            print(f"   - Student ID: {student_id}")
+            try:
+                from .agents.vector_performance_updater import update_vector_performance
+                result = update_vector_performance(
+                    subject_agent_id=additional_data["subject_agent_id"],
+                    quality_scores=quality_scores,
+                    feedback=feedback,
+                    confusion_type=confusion_type,
+                    student_id=student_id  # Pass student ID for tracking
+                )
+                print(f"   - Update Result: {result}")
+            except Exception as e:
+                print(f"❌ Error updating agent performance: {e}")
+        else:
+            print(f"⚠️ PERFORMANCE UPDATE SKIPPED")
+            print(f"   - Quality Scores Present: {quality_scores is not None}")
+            print(f"   - Additional Data Present: {additional_data is not None}")
+            print(f"   - Agent ID Present: {additional_data.get('subject_agent_id') if additional_data else False}")
+
+        # -------------------------------
         # Push conversation to history
         # -------------------------------
         self.students.update_one(
@@ -495,24 +521,48 @@ class StudentManager:
 
         for doc in sample_docs:
             subjects.update(doc.get("conversation_history", {}).keys())
-
         if not subjects:
             return 0
 
         for subject in subjects:
-            result = self.students.update_one(
-                {
-                    f"conversation_history.{subject}._id": conversation_id
-                },
-                {
-                    "$set": {
-                        f"conversation_history.{subject}.$.feedback": feedback
-                    }
-                }
+            # Find the conversation to get quality_scores and rl_metadata
+            doc = self.students.find_one(
+                {f"conversation_history.{subject}._id": conversation_id},
+                {f"conversation_history.{subject}.$": 1}
             )
+            
+            if doc and doc.get("conversation_history", {}).get(subject):
+                conv = doc["conversation_history"][subject][0]
+                quality_scores = conv.get("quality_scores", {})
+                
+                # Calculate RL Reward
+                reward = 0.0
+                if feedback == "like":
+                    reward += 1.0
+                elif feedback == "dislike":
+                    reward -= 1.0
+                    
+                if quality_scores:
+                    rag_relevance = quality_scores.get("rag_relevance", 0) / 100.0
+                    completeness = quality_scores.get("answer_completeness", 0) / 100.0
+                    hallucination = quality_scores.get("hallucination_risk", 0) / 100.0
+                    reward += (rag_relevance * 0.2) + (completeness * 0.2) - (hallucination * 0.1)
+                
+                reward = round(reward, 3)
 
-            if result.modified_count > 0:
-                return 1
+                # Update feedback and reward
+                result = self.students.update_one(
+                    {f"conversation_history.{subject}._id": conversation_id},
+                    {
+                        "$set": {
+                            f"conversation_history.{subject}.$.feedback": feedback,
+                            f"conversation_history.{subject}.$.rl_metadata.reward": reward
+                        }
+                    }
+                )
+
+                if result.modified_count > 0:
+                    return 1
 
         return 0
 

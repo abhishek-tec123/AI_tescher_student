@@ -1,5 +1,6 @@
 import re
 from studentProfileDetails.generate_response_with_groq import generate_response_with_groq
+from studentProfileDetails.utils.agent_utils import get_dynamic_agent_id_for_subject  # ✅ Import dynamic agent ID mapping
 
 def is_greeting(query: str) -> bool:
     q = query.lower().strip()
@@ -59,14 +60,27 @@ def handle_greeting_chat(*, payload, student_manager, profile):
         ),
     )
 
-    conversation_id = student_manager.add_conversation(
-        student_id=payload.student_id,
-        subject=payload.subject,
-        query=payload.query,
-        response=response,
-        confusion_type="NO_CONFUSION",
-        evaluation=None,
-    )
+    agent_id = get_dynamic_agent_id_for_subject(student_manager, payload.student_id, payload.subject)
+    if agent_id:
+        conversation_id = student_manager.add_conversation(
+            student_id=payload.student_id,
+            subject=payload.subject,
+            query=payload.query,
+            response=response,
+            confusion_type="NO_CONFUSION",
+            evaluation=None,
+            additional_data={"subject_agent_id": agent_id}
+        )
+    else:
+        conversation_id = student_manager.add_conversation(
+            student_id=payload.student_id,
+            subject=payload.subject,
+            query=payload.query,
+            response=response,
+            confusion_type="NO_CONFUSION",
+            evaluation=None,
+        )
+        print(f"⚠️ Agent not found for subject '{payload.subject}'. Performance tracking skipped.")
 
     return {
         "response": response,
@@ -95,14 +109,27 @@ def handle_general_chat_llm(
         ),
     )
 
-    conversation_id = student_manager.add_conversation(
-        student_id=payload.student_id,
-        subject=payload.subject,
-        query=payload.query,
-        response=response,
-        confusion_type="NO_CONFUSION",
-        evaluation=None,
-    )
+    agent_id = get_dynamic_agent_id_for_subject(student_manager, payload.student_id, payload.subject)
+    if agent_id:
+        conversation_id = student_manager.add_conversation(
+            student_id=payload.student_id,
+            subject=payload.subject,
+            query=payload.query,
+            response=response,
+            confusion_type="NO_CONFUSION",
+            evaluation=None,
+            additional_data={"subject_agent_id": agent_id}
+        )
+    else:
+        conversation_id = student_manager.add_conversation(
+            student_id=payload.student_id,
+            subject=payload.subject,
+            query=payload.query,
+            response=response,
+            confusion_type="NO_CONFUSION",
+            evaluation=None,
+        )
+        print(f"⚠️ Agent not found for subject '{payload.subject}'. Performance tracking skipped.")
 
     return {
         "response": response,
