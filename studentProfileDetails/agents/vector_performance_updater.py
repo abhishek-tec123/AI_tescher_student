@@ -21,10 +21,17 @@ class VectorPerformanceUpdater:
         """
         Update performance data for an agent with optimized search.
         """
-        print(f"🚀 VECTOR PERFORMANCE UPDATE STARTED")
+        import uuid
+        call_id = str(uuid.uuid4())[:8]  # Short unique ID for this call
+        
+        print(f"🚀 VECTOR PERFORMANCE UPDATE STARTED [{call_id}]")
+        print(f"   - Call ID: {call_id}")
         print(f"   - Target Agent ID: {subject_agent_id}")
         print(f"   - Quality Scores: {quality_scores}")
         print(f"   - Student ID: {student_id}")
+        print(f"   - Feedback: {feedback}")
+        print(f"   - Confusion Type: {confusion_type}")
+        print(f"   - Timestamp: {datetime.now().isoformat()}")
 
         try:
             # First, find which database contains this agent (optimized search)
@@ -60,27 +67,51 @@ class VectorPerformanceUpdater:
             db = self.client[target_database]
             collection = db[target_collection]
             
-            # Get current performance data from first document
-            current_performance = collection.find_one({"subject_agent_id": subject_agent_id}).get("performance", self._get_default_performance())
-            print(f"   - Current Performance: {current_performance.get('total_conversations', 0)} conversations")
-
-            # Update performance metrics with student tracking
-            updated_performance = self._calculate_updated_performance(
-                current_performance, quality_scores, feedback, confusion_type, student_id
-            )
-
+            # Check how many documents exist for this agent
+            doc_count = collection.count_documents({"subject_agent_id": subject_agent_id})
+            print(f"   📊 Found {doc_count} documents for agent {subject_agent_id}")
+            
             # Update ALL documents for this agent in this collection only
-            result = collection.update_many(
-                {"subject_agent_id": subject_agent_id},
-                {"$set": {"performance": updated_performance}}
-            )
-
-            if result.modified_count > 0:
-                print(f"   ✅ Updated {result.modified_count} documents in {target_database}.{target_collection}")
-                return True
+            # But first, get the current performance from any one document to avoid double counting
+            current_doc = collection.find_one({"subject_agent_id": subject_agent_id})
+            if current_doc and "performance" in current_doc:
+                # Use the existing performance data as base to avoid double counting
+                current_perf = current_doc["performance"]
+                current_conv_count = current_perf.get("total_conversations", 0)
+                print(f"   📈 Current conversation count: {current_conv_count}")
+                
+                updated_performance = self._calculate_updated_performance(
+                    current_perf, quality_scores, feedback, confusion_type, student_id, call_id
+                )
+                
+                new_conv_count = updated_performance.get("total_conversations", 0)
+                print(f"   📈 New conversation count: {new_conv_count}")
+                print(f"   📈 Increment: {new_conv_count - current_conv_count}")
             else:
-                print(f"   ⚠️ No documents modified in {target_database}.{target_collection}")
-                return False
+                # Use default performance if no existing data
+                print(f"   ⚠️ No existing performance data found, using default")
+                updated_performance = self._calculate_updated_performance(
+                    self._get_default_performance(), quality_scores, feedback, confusion_type, student_id, call_id
+                )
+            
+            print(f"   🔄 Updating {doc_count} documents with new performance data...")
+            
+            # Instead of update_many, let's update all documents individually to avoid any issues
+            # This ensures we don't have any race conditions or inconsistent updates
+            all_docs = collection.find({"subject_agent_id": subject_agent_id})
+            total_updated = 0
+            
+            for doc in all_docs:
+                result = collection.update_one(
+                    {"_id": doc["_id"]},
+                    {"$set": {"performance": updated_performance}}
+                )
+                if result.modified_count > 0:
+                    total_updated += 1
+            
+            print(f"   ✅ Updated {total_updated} documents in {target_database}.{target_collection}")
+            print(f"   🎯 PERFORMANCE UPDATE COMPLETED [{call_id}]")
+            return total_updated > 0
                 
         except Exception as e:
             print(f"❌ Error updating vector performance: {e}")
@@ -126,14 +157,20 @@ class VectorPerformanceUpdater:
     
     def _calculate_updated_performance(self, current_performance: Dict[str, Any], 
                                    quality_scores: Dict[str, float], feedback: str, 
-                                   confusion_type: str, student_id: str) -> Dict[str, Any]:
+                                   confusion_type: str, student_id: str, call_id: str = "unknown") -> Dict[str, Any]:
         """Calculate updated performance metrics while preserving original structure."""
         try:
+            print(f"🔧 CALCULATING UPDATED PERFORMANCE [{call_id}]")
+            print(f"   - Input total_conversations: {current_performance.get('total_conversations', 0)}")
+            
             # Copy current performance to preserve structure
             updated = current_performance.copy()
             
             # Update conversation count
-            updated["total_conversations"] = current_performance.get("total_conversations", 0) + 1
+            current_total = current_performance.get("total_conversations", 0)
+            updated["total_conversations"] = current_total + 1
+            
+            print(f"   - Updated total_conversations: {updated['total_conversations']} (incremented by 1)")
             
             # Update student_usage structure (preserve existing format)
             student_usage = updated.get("student_usage", {})
@@ -152,12 +189,15 @@ class VectorPerformanceUpdater:
             if student_id and student_id not in student_usage.get("student_ids", []):
                 student_usage["student_ids"].append(student_id)
                 student_usage["total_students"] = len(student_usage["student_ids"])
+                print(f"   - Added new student {student_id}, total students: {student_usage['total_students']}")
             
             # Update conversation count per student
             if student_id:
                 conv_per_student = student_usage.get("conversation_per_student", {})
-                conv_per_student[student_id] = conv_per_student.get(student_id, 0) + 1
+                current_student_conv = conv_per_student.get(student_id, 0)
+                conv_per_student[student_id] = current_student_conv + 1
                 student_usage["conversation_per_student"] = conv_per_student
+                print(f"   - Student {student_id} conversations: {current_student_conv} -> {conv_per_student[student_id]}")
                 
                 # Update student performance
                 student_perf = student_usage.get("student_performance", {})
@@ -187,6 +227,10 @@ class VectorPerformanceUpdater:
                 student_usage["student_performance"] = student_perf
             
             updated["student_usage"] = student_usage
+            
+            # Fix unique_students calculation - it should match the actual count of unique student IDs
+            updated["unique_students"] = len(student_usage.get("student_ids", []))
+            print(f"   - Final unique_students count: {updated['unique_students']}")
             
             # Update metrics structure (preserve existing format)
             metrics = updated.get("metrics", {})
@@ -246,11 +290,125 @@ class VectorPerformanceUpdater:
             # Update last_updated
             updated["last_updated"] = datetime.now().isoformat()
             
+            print(f"   ✅ PERFORMANCE CALCULATION COMPLETED [{call_id}]")
             return updated
             
         except Exception as e:
             print(f"❌ Error calculating updated performance: {e}")
             return current_performance
+    
+    def get_agent_performance_from_vectors(self, subject_agent_id: str) -> Dict[str, Any]:
+        """
+        Get agent performance data from vector documents.
+        
+        Args:
+            subject_agent_id: The agent ID
+            
+        Returns:
+            Dict containing performance data or empty structure if not found
+        """
+        try:
+            # Find which database contains this agent
+            target_database = None
+            target_collection = None
+            
+            for db_name in self.client.list_database_names():
+                if db_name in ["admin", "local", "config", "teacher_ai"]:
+                    continue
+                    
+                db = self.client[db_name]
+                
+                for collection_name in db.list_collection_names():
+                    collection = db[collection_name]
+                    
+                    # Check if this collection has the agent
+                    sample_doc = collection.find_one({"subject_agent_id": subject_agent_id})
+                    if sample_doc:
+                        target_database = db_name
+                        target_collection = collection_name
+                        break
+                
+                if target_database:
+                    break
+            
+            if not target_database:
+                print(f"⚠️ No documents found for agent {subject_agent_id}")
+                return self._get_empty_performance_data(subject_agent_id)
+            
+            # Get performance data from first document found
+            db = self.client[target_database]
+            collection = db[target_collection]
+            
+            agent_doc = collection.find_one({"subject_agent_id": subject_agent_id})
+            if not agent_doc:
+                return self._get_empty_performance_data(subject_agent_id)
+            
+            performance = agent_doc.get("performance", {})
+            
+            # Ensure unique_students is calculated correctly
+            student_usage = performance.get("student_usage", {})
+            student_ids = student_usage.get("student_ids", [])
+            
+            # Fix unique_students calculation
+            if "unique_students" not in performance or performance["unique_students"] != len(student_ids):
+                performance["unique_students"] = len(student_ids)
+                
+                # Update the document if we fixed the count
+                collection.update_many(
+                    {"subject_agent_id": subject_agent_id},
+                    {"$set": {"performance.unique_students": len(student_ids)}}
+                )
+            
+            # Build complete performance report
+            return {
+                "agent_id": subject_agent_id,
+                "agent_metadata": agent_doc.get("agent_metadata", {}),
+                **performance  # Include all performance data
+            }
+            
+        except Exception as e:
+            print(f"❌ Error getting agent performance from vectors: {e}")
+            return self._get_empty_performance_data(subject_agent_id)
+    
+    def _get_empty_performance_data(self, subject_agent_id: str) -> Dict[str, Any]:
+        """Return empty performance data structure."""
+        return {
+            "agent_id": subject_agent_id,
+            "agent_metadata": {},
+            "performance_period": "All Time (Cumulative)",
+            "total_conversations": 0,
+            "unique_students": 0,
+            "student_usage": {
+                "total_students": 0,
+                "student_ids": [],
+                "conversation_per_student": {},
+                "student_performance": {}
+            },
+            "metrics": {
+                "pedagogical_value": 0,
+                "critical_confidence": 0,
+                "rag_relevance": 0,
+                "answer_completeness": 0,
+                "hallucination_risk": 0,
+                "overall_score": 0,
+                "satisfaction_rate": 0,
+                "feedback_counts": {
+                    "like": 0,
+                    "dislike": 0,
+                    "neutral": 0
+                },
+                "confusion_distribution": {}
+            },
+            "performance_level": "Critical",
+            "health_indicators": {
+                "quality_health": {"status": "No Data", "color": "gray"},
+                "hallucination_health": {"status": "No Data", "color": "gray"},
+                "engagement_health": {"status": "No Data", "color": "gray"}
+            },
+            "trend_analysis": {},
+            "recommendations": [],
+            "last_updated": datetime.now().isoformat()
+        }
 
 # Convenience function for easy usage
 def update_vector_performance(subject_agent_id: str, quality_scores: Dict[str, float], 

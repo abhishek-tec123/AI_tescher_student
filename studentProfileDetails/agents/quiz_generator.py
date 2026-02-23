@@ -201,6 +201,48 @@ JSON FORMAT (ONLY THIS):
             f"⚠️ WARNING: Expected {num_questions} questions, "
             f"got {len(quiz_clean)}"
         )
+        
+        # If we got no questions, try a simpler approach with better prompt
+        if len(quiz_clean) == 0:
+            print(f"🔄 Retrying with simplified quiz generation...")
+            
+            # Create a simpler, more direct prompt
+            simple_prompt = f"""
+Generate exactly {num_questions} multiple-choice questions about {topic or subject}.
+
+Student Learning Context:
+{conversation_text[:1000] if conversation_text else f"Topic: {topic}"}
+
+Format: Return ONLY a JSON array like this:
+[
+  {{
+    "question": "What is X?",
+    "options": ["A", "B", "C", "D"],
+    "answer": "A"
+  }}
+]
+
+Requirements:
+- Exactly {num_questions} questions
+- 4 options each
+- Answer must match one option
+- Based on the learning context above
+"""
+            
+            # Retry with simpler prompt
+            retry_output = summarize_text_with_groq(
+                text=conversation_text[:500] if conversation_text else topic,
+                prompt=simple_prompt
+            )
+            
+            retry_parsed = extract_json_from_text(retry_output)
+            retry_quiz = retry_parsed.get("quiz", [])
+            quiz_clean = normalize_quiz_items(retry_quiz, num_questions)
+            
+            print(f"🔄 Retry result: Got {len(quiz_clean)} questions")
+        
+        # If we still have fewer questions but at least 1, use them as-is
+        # Don't generate fake questions - it's better to have fewer real questions
 
     # Prepare current question (first question)
     current_question = None

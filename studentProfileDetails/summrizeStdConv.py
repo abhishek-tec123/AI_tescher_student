@@ -56,14 +56,23 @@ def extract_text_from_history(history):
     """
     texts = []
     for item in history:
+        # Extract both query and response for better context
+        query = item.get("query", "")
         resp = item.get("response", "")
+        
         if isinstance(resp, dict):
             # Convert dict to string safely (e.g., JSON)
             resp = json.dumps(resp)
         elif not isinstance(resp, str):
             resp = str(resp)
-        texts.append(resp.strip())
-    return "\n".join(texts)
+            
+        # Format as conversation pair
+        if query and resp:
+            texts.append(f"Q: {query.strip()}\nA: {resp.strip()}")
+        elif resp:  # Fallback to just response if no query
+            texts.append(resp.strip())
+            
+    return "\n\n".join(texts)
 
 import json
 import logging

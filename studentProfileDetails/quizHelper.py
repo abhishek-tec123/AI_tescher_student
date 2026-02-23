@@ -235,10 +235,10 @@ def handle_quiz_mode(student_id: str, query: str, student_manager=None):
                     else:
                         print(f"📈 Good performance ({score_percentage:.1%}): consecutive_perfect_scores={consecutive_perfect_scores}")
                 else:
-                    # Mixed performance - reset consecutive counters
-                    consecutive_low_scores = 0
+                    # Score between 60-79% = still considered low performance (not mixed)
+                    consecutive_low_scores += 1
                     consecutive_perfect_scores = 0
-                    print(f"🔄 Mixed performance ({score_percentage:.1%}): counters reset")
+                    print(f"� Low-mid performance ({score_percentage:.1%}): consecutive_low_scores={consecutive_low_scores}")
                 
                 # Update profile with quiz tracking data
                 updated_profile = current_profile.copy()
@@ -260,16 +260,32 @@ def handle_quiz_mode(student_id: str, query: str, student_manager=None):
                     except Exception as e:
                         print(f"Failed to update preferences after quiz: {e}")
                 
+                # Get agent ID for performance tracking
+                from .utils.agent_utils import get_dynamic_agent_id_for_subject
+                agent_id = get_dynamic_agent_id_for_subject(student_manager, student_id, actual_subject)
+                
+                # Calculate quality scores based on quiz performance
+                score_percentage = (final["score"] / final["total"]) * 100
+                quality_scores = {
+                    "overall_score": score_percentage,
+                    "quiz_performance": score_percentage,
+                    "engagement": 85.0 if score_percentage >= 60 else 70.0,
+                    "participation": 90.0,  # High for completing quiz
+                    "accuracy": score_percentage
+                }
+                
                 student_manager.add_conversation(
                     student_id=student_id,
                     subject=actual_subject,
                     query=query,
                     response=f"Quiz completed! Score: {final['score']}/{final['total']}",
+                    quality_scores=quality_scores,  # Add quality scores for performance tracking
                     additional_data={
                         "quiz_action": "completed",
                         "final_score": final["score"],
                         "total_questions": final["total"],
                         "answers": final["answers"],
+                        "subject_agent_id": agent_id,  # Add agent ID for performance tracking
                         "quiz_tracking": {
                             "consecutive_low_scores": consecutive_low_scores,
                             "consecutive_perfect_scores": consecutive_perfect_scores,
@@ -277,6 +293,7 @@ def handle_quiz_mode(student_id: str, query: str, student_manager=None):
                         }
                     }
                 )
+                print(f"🔄 Quiz completion stored with performance tracking (score: {score_percentage:.1f}%)")
             except Exception as e:
                 print(f"Failed to update quiz tracking: {e}")
 
