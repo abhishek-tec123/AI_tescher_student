@@ -12,7 +12,9 @@ app = FastAPI(title="Student Learning API")
 app.state.create_vectors_service = create_vectors_service
 
 origins = [
-    "https://tecorb.in",
+    "https://tecorb.in",       # production
+    "http://localhost:8080",   # local dev
+    "http://127.0.0.1:8080"
 ]
 
 app.add_middleware(

@@ -11,7 +11,7 @@ from Teacher_AI_Agent.dbFun.classes_and_subject import (
     list_all_classes,
     get_subjects_by_class,
 )
-from Teacher_AI_Agent.dbFun.collections import list_all_collections, get_all_agents_of_class
+from Teacher_AI_Agent.dbFun.collections import list_all_collections, get_all_agents_of_class, get_recent_activity, get_recent_activity
 from pydantic import BaseModel
 
 router = APIRouter()
@@ -44,38 +44,78 @@ def db_status(class_: str, subject: str):
 # -------------------------------------------------
 # Vector Creation & Search
 # -------------------------------------------------
+# @router.post("/create_vectors")
+# async def create_vectors(
+#     request: Request,
+#     class_: str = Form(...),
+#     subject: str = Form(...),
+
+#     agent_type: str | None = Form(None),
+#     agent_name: str | None = Form(None),
+#     description: str | None = Form(None),
+#     teaching_tone: str | None = Form(None),
+
+#     files: Optional[List[UploadFile]] = File(None)
+
+# ):
+#     agent_metadata = {
+#         "agent_type": agent_type,
+#         "agent_name": agent_name,
+#         "description": description,
+#         "teaching_tone": teaching_tone,
+#     }
+
+#     # remove None values
+#     agent_metadata = {k: v for k, v in agent_metadata.items() if v is not None}
+
+#     return await create_vectors_service(
+#         class_=class_,
+#         subject=subject,
+#         files=files,
+#         embedding_model=request.app.state.embedding_model,
+#         agent_metadata=agent_metadata or None
+#     )
 @router.post("/create_vectors")
 async def create_vectors(
     request: Request,
-    class_: str = Form(...),
     subject: str = Form(...),
+    class_: Optional[str] = Form(None),  # optional for subject-only mode
 
-    agent_type: str | None = Form(None),
-    agent_name: str | None = Form(None),
-    description: str | None = Form(None),
-    teaching_tone: str | None = Form(None),
+    # Optional agent metadata
+    agent_type: Optional[str] = Form(None),
+    agent_name: Optional[str] = Form(None),
+    description: Optional[str] = Form(None),
+    teaching_tone: Optional[str] = Form(None),
 
     files: Optional[List[UploadFile]] = File(None)
-
 ):
-    agent_metadata = {
+    # Build agent metadata dict only if values exist
+    agent_metadata = {k: v for k, v in {
         "agent_type": agent_type,
         "agent_name": agent_name,
         "description": description,
         "teaching_tone": teaching_tone,
-    }
+    }.items() if v is not None} or None
 
-    # remove None values
-    agent_metadata = {k: v for k, v in agent_metadata.items() if v is not None}
+    # Determine mode
+    mode = "teacher_agent" if class_ else "subject_only"
 
-    return await create_vectors_service(
-        class_=class_,
+    # Call the service (class_ can be None for general DB)
+    result = await create_vectors_service(
         subject=subject,
+        class_=class_,
         files=files,
         embedding_model=request.app.state.embedding_model,
-        agent_metadata=agent_metadata or None
+        agent_metadata=agent_metadata,
     )
 
+    # Add mode info to response
+    response = {
+        "mode": mode,
+        **result
+    }
+
+    return response
 
 @router.post("/search")
 def search(payload: SearchRequest, request: Request):

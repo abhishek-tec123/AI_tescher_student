@@ -7,7 +7,19 @@ MONGODB_URI = os.environ.get("MONGODB_URI")
 
 SYSTEM_DBS = {"admin", "local", "config", "teacher_ai"}
 
+import logging
+import os
+from pymongo import MongoClient
+
+logger = logging.getLogger("collections")
+MONGODB_URI = os.environ.get("MONGODB_URI")
+
+SYSTEM_DBS = {"admin", "local", "config", "teacher_ai"}
+
 def list_all_collections():
+    """
+    Returns all agents with metadata and key performance metrics
+    """
     try:
         client = MongoClient(MONGODB_URI)
         result = []
@@ -21,19 +33,26 @@ def list_all_collections():
             for collection_name in db.list_collection_names():
                 collection = db[collection_name]
 
-                # Get first document where agent_metadata.description exists
+                # Find first document with agent_metadata.description
                 doc = collection.find_one(
                     {"agent_metadata.description": {"$exists": True}},
-                    {"agent_metadata.agent_name": 1,
-                     "agent_metadata.agent_type": 1,
-                     "agent_metadata.description": 1,
-                     "subject_agent_id": 1}
+                    {
+                        "agent_metadata.agent_name": 1,
+                        "agent_metadata.agent_type": 1,
+                        "agent_metadata.description": 1,
+                        "subject_agent_id": 1,
+                        "performance.total_conversations": 1,
+                        "performance.unique_students": 1,
+                        "performance.metrics.overall_score": 1
+                    }
                 )
 
                 if not doc:
                     continue
 
                 agent = doc.get("agent_metadata", {})
+                performance = doc.get("performance", {})
+                metrics = performance.get("metrics", {})
 
                 result.append({
                     "class": db_name,
@@ -41,7 +60,10 @@ def list_all_collections():
                     "agent_name": agent.get("agent_name"),
                     "agent_type": agent.get("agent_type"),
                     "description": agent.get("description"),
-                    "subject_agent_id": doc.get("subject_agent_id")
+                    "subject_agent_id": doc.get("subject_agent_id"),
+                    "total_conversations": performance.get("total_conversations", 0),
+                    "unique_students": performance.get("unique_students", 0),
+                    "overall_score": metrics.get("overall_score", 0)
                 })
 
         return {
