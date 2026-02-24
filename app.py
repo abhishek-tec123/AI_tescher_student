@@ -5,7 +5,7 @@ from datetime import datetime
 import os
 
 from routes.startup import startup_event
-from routes import vectors, admin, student, auth, agent_performance, all_agents_performance
+from routes import vectors, admin, student, auth, agent_performance, all_agents_performance, activity
 from Teacher_AI_Agent.dbFun.createVector import create_vectors_service
 app = FastAPI(title="Student Learning API")
 
@@ -79,6 +79,13 @@ api_v1_router.include_router(
     all_agents_performance.router, 
     prefix="/performance", 
     tags=["All Agents Performance"]
+)
+
+# Activity tracking routes (auth required)
+api_v1_router.include_router(
+    activity.router, 
+    prefix="/activity", 
+    tags=["Activity Tracking"]
 )
 
 app.include_router(api_v1_router)

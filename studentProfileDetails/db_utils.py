@@ -118,6 +118,22 @@ class StudentManager:
 
         self.students.insert_one(student_doc)
 
+        # Log activity
+        try:
+            from .activity_tracker import log_student_created
+            subject_agent_name = None
+            if subject_agent:
+                subject_agent_name = subject_agent.get("name", "Unknown Agent")
+            
+            log_student_created(
+                student_id=student_id,
+                student_name=name,
+                class_name=class_name,
+                subject_agent=subject_agent_name
+            )
+        except Exception as e:
+            print(f"Failed to log student creation activity: {e}")
+
         return student_id, password
 
     # ---------------------------
@@ -274,6 +290,38 @@ class StudentManager:
             {"student_id": student_id},   # ✅ FIXED HERE
             {"$set": update_data}
         )
+
+        # Log activity if update was successful
+        if result.modified_count > 0:
+            try:
+                from .activity_tracker import log_student_updated
+                
+                # Get student name for logging
+                student = self.get_student(student_id)
+                student_name = student["student_details"]["name"] if student else "Unknown Student"
+                
+                # Track what was changed
+                changes = []
+                for field in update_data.keys():
+                    if "name" in field:
+                        changes.append("name")
+                    elif "email" in field:
+                        changes.append("email")
+                    elif "class" in field:
+                        changes.append("class")
+                    elif "subject_agent" in field:
+                        changes.append("subject_agent")
+                    elif "password_hash" in field:
+                        changes.append("password")
+                
+                if changes:
+                    log_student_updated(
+                        student_id=student_id,
+                        student_name=student_name,
+                        changes=changes
+                    )
+            except Exception as e:
+                print(f"Failed to log student update activity: {e}")
 
         return result
     

@@ -227,6 +227,25 @@ def create_vector_and_store_in_atlas(
         except Exception as e:
             logger.error(f"❌ Error creating agent performance summary: {e}")
 
+    # Log activity for new agent creation
+    try:
+        from studentProfileDetails.activity_tracker import log_agent_created
+        
+        agent_name = agent_metadata.get("agent_name") if agent_metadata else collection_name
+        if not agent_name:
+            agent_name = collection_name
+            
+        log_agent_created(
+            agent_id=subject_agent_id,
+            agent_name=agent_name,
+            subject=collection_name,
+            class_name=db_name
+        )
+        logger.info(f"✅ Logged agent creation activity for {subject_agent_id}")
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to log agent creation activity: {e}")
+
     return summary
 
 

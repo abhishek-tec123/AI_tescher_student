@@ -11,7 +11,7 @@ from Teacher_AI_Agent.dbFun.classes_and_subject import (
     list_all_classes,
     get_subjects_by_class,
 )
-from Teacher_AI_Agent.dbFun.collections import list_all_collections, get_all_agents_of_class, get_recent_activity, get_recent_activity
+from Teacher_AI_Agent.dbFun.collections import list_all_collections, get_all_agents_of_class
 from pydantic import BaseModel
 
 router = APIRouter()

@@ -71,6 +71,41 @@ async def update_agent_data(
             {"$set": update_fields}
         )
 
+    # Log activity for agent update
+    try:
+        from studentProfileDetails.activity_tracker import log_agent_updated
+        
+        # Determine what was changed
+        changes = []
+        if agent_type:
+            changes.append("agent_type")
+        if agent_name:
+            changes.append("agent_name")
+        if description:
+            changes.append("description")
+        if teaching_tone:
+            changes.append("teaching_tone")
+        if files:
+            changes.append("documents")
+        
+        # Get the agent name for logging
+        agent_doc = found_collection.find_one({"subject_agent_id": subject_agent_id})
+        agent_metadata = agent_doc.get("agent_metadata", {}) if agent_doc else {}
+        agent_name_for_log = agent_metadata.get("agent_name") or agent_name or found_collection_name
+        
+        if changes:
+            log_agent_updated(
+                agent_id=subject_agent_id,
+                agent_name=agent_name_for_log,
+                subject=found_collection_name,
+                class_name=found_db_name,
+                changes=changes
+            )
+            print(f"✅ Logged agent update activity for {subject_agent_id}")
+        
+    except Exception as e:
+        print(f"❌ Failed to log agent update activity: {e}")
+
     # -------------------------------
     # Replace documents if new files uploaded
     # -------------------------------
