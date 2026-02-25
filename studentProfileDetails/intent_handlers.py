@@ -63,6 +63,9 @@ def handle_chat_intent(
     # -----------------------------------------
     # Academic Tutor Flow (Vector DB + Agent)
     # -----------------------------------------
+    # Get subject_agent_id for agent introduction
+    subject_agent_id = get_dynamic_agent_id_for_subject(student_manager, payload.student_id, payload.subject)
+    
     chat = diagnosis_chat(
         student_agent,
         payload.query,
@@ -70,6 +73,7 @@ def handle_chat_intent(
         payload.subject,
         profile,
         context=history_context,
+        subject_agent_id=subject_agent_id
     )
 
     response = chat["response"]

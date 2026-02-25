@@ -142,6 +142,55 @@ JSON:
 # 🧱 PROMPT BUILDER (BASE + STUDENT + SESSION)
 # =====================================================
 
+def detect_formal_communication(query: str) -> bool:
+    """
+    Detect if student is using formal communication or greeting that should trigger introduction
+    """
+    formal_indicators = [
+        "sir", "ma'am", "teacher", "professor", "respected", "honored",
+        "please", "thank you", "excuse me", "pardon", "would you", "could you",
+        "may i", "can you please", "kindly", "appreciate", "grateful"
+    ]
+    
+    greeting_indicators = ["hello", "hi", "hey", "good morning", "good afternoon", "good evening"]
+    
+    query_lower = query.lower()
+    
+    # Check for formal indicators
+    formal_count = sum(1 for indicator in formal_indicators if indicator in query_lower)
+    
+    # Check for greeting indicators
+    greeting_count = sum(1 for indicator in greeting_indicators if indicator in query_lower)
+    
+    # Check for proper capitalization and punctuation
+    has_proper_capitalization = query[0].isupper() if query else False
+    has_proper_punctuation = query.endswith(('.', '?', '!')) if query else False
+    
+    # Consider it formal/introduction-worthy if:
+    # - At least 2 formal indicators, OR
+    # - 1 formal indicator + proper capitalization/punctuation, OR
+    # - Contains high-formality indicators like "sir", "ma'am", "teacher", "professor", "respected", OR
+    # - Any greeting indicator (hello, hi, etc.) - ALWAYS trigger introduction for greetings
+    high_formality_indicators = ["sir", "ma'am", "teacher", "professor", "respected", "honored"]
+    has_high_formality = any(indicator in query_lower for indicator in high_formality_indicators)
+    has_greeting = greeting_count >= 1
+    
+    return (formal_count >= 2) or (formal_count >= 1 and (has_proper_capitalization or has_proper_punctuation)) or has_high_formality or has_greeting
+
+
+def get_agent_metadata(subject_agent_id: str) -> dict:
+    """
+    Get agent metadata from database using subject_agent_id
+    """
+    try:
+        from Teacher_AI_Agent.dbFun.get_agent_data import get_agent_data
+        agent_data = get_agent_data(subject_agent_id)
+        return agent_data.get("agent_metadata", {})
+    except Exception as e:
+        print(f"Error getting agent metadata: {e}")
+        return {}
+
+
 def build_teacher_prompt(
     *,
     student_profile: dict,
@@ -149,7 +198,8 @@ def build_teacher_prompt(
     subject: str,
     confusion_type: str,
     session_context: str,
-    current_query: str = "Current Question"
+    current_query: str = "Current Question",
+    agent_metadata: dict = None
 ) -> str:
 
     base_prompt = get_base_prompt()
@@ -161,9 +211,30 @@ def build_teacher_prompt(
     include_example = student_profile.get("include_example", True)
     common_mistakes = student_profile.get("common_mistakes", [])
 
+    # Check if formal communication is detected and add agent introduction
+    agent_introduction = ""
+    if agent_metadata and detect_formal_communication(current_query):
+        agent_name = agent_metadata.get("agent_name", "")
+        description = agent_metadata.get("description", "")
+        teaching_tone = agent_metadata.get("teaching_tone", "professional")
+        
+        if agent_name:
+            agent_introduction = f"""
+AGENT INTRODUCTION:
+When introducing yourself, use this information:
+- Name: {agent_name}
+- Description: {description}
+- Teaching Tone: {teaching_tone}
+
+Introduce yourself naturally at the beginning of your response if the student is being formal.
+Example: "Hello! I'm {agent_name}. {description}"
+
+"""
+
     prompt = f"""
 {base_prompt}
 
+{agent_introduction}
 You are an expert and supportive school teacher.
 
 CLASS: {class_name}
@@ -237,7 +308,8 @@ def diagnosis_chat(
     class_name,
     subject,
     student_profile,
-    context=None
+    context=None,
+    subject_agent_id=None
 ):
     """
     Preference-aware, session-aware teacher response
@@ -248,6 +320,13 @@ def diagnosis_chat(
     # -----------------------------
     diagnosis = diagnose_student_confusion(query, subject, class_name)
     confusion_type = diagnosis.get("confusion_type", "NO_CONFUSION")
+
+    # -----------------------------
+    # Get agent metadata for introduction
+    # -----------------------------
+    agent_metadata = None
+    if subject_agent_id:
+        agent_metadata = get_agent_metadata(subject_agent_id)
 
     student_profile.setdefault("confusion_counter", {})
     student_profile.setdefault("common_mistakes", [])
@@ -337,7 +416,8 @@ def diagnosis_chat(
         subject=subject,
         confusion_type=confusion_type,
         session_context=full_context,
-        current_query=query
+        current_query=query,
+        agent_metadata=agent_metadata
     )
 
     full_prompt += f"\nOriginal Student Question:\n{query}\n"
