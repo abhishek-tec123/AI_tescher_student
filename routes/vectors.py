@@ -208,44 +208,46 @@ def get_student_subjects(
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Get all subjects from a student's subject_agent array.
-    Students can only access their own subjects, admins can access any student's subjects.
+    Returns:
+    1. Student assigned subjects
+    2. All subjects from general collection
     """
-    # Students can only access their own data
+
+    # Permission check
     if current_user["role"] == "student" and current_user["user_id"] != student_id:
-        raise HTTPException(status_code=403, detail="Access denied: You can only access your own data")
-    
+        raise HTTPException(status_code=403, detail="Access denied")
+
     student = student_manager.get_student(student_id)
-    
+
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
-    
-    # Extract subjects from subject_agent array
+
+    # ------------------------------------------------
+    # 1️⃣ Student Assigned Subjects (existing logic)
+    # ------------------------------------------------
     subject_agent = student.get("student_details", {}).get("subject_agent", [])
-    
-    if not subject_agent:
-        return {"subjects": []}
-    
-    # Handle both array of objects and array of strings formats
-    subjects = []
+    student_subjects = []
+
     if isinstance(subject_agent, list):
         for item in subject_agent:
             subject_name = ""
+
             if isinstance(item, dict):
                 subject_name = item.get("subject", "")
             elif isinstance(item, str):
                 subject_name = item
-            
+
             if subject_name:
-                # Try to get description and subject_agent_id from database
                 description = ""
                 subject_agent_id = ""
+
                 try:
                     from Teacher_AI_Agent.dbFun.collections import get_all_agents_of_class
-                    # Get student's class to find the right database
+
                     student_class = student.get("student_details", {}).get("class", "")
                     if student_class:
                         agents_response = get_all_agents_of_class(student_class)
+
                         if agents_response.get("status") == "success":
                             agents = agents_response.get("agents", [])
                             for agent in agents:
@@ -254,13 +256,39 @@ def get_student_subjects(
                                     subject_agent_id = agent.get("subject_agent_id", "")
                                     break
                 except Exception:
-                    # If we can't get description, continue with empty string
                     pass
-                
-                subjects.append({
+
+                student_subjects.append({
                     "name": subject_name,
                     "description": description,
                     "subject_agent_id": subject_agent_id
                 })
-    
-    return {"subjects": subjects}
+
+    # ------------------------------------------------
+    # 2️⃣ All Subjects from "general" collection
+    # ------------------------------------------------
+    general_subjects = []
+
+    try:
+        from Teacher_AI_Agent.dbFun.collections import get_general_collection
+
+        general_response = get_general_collection()
+
+        if general_response.get("status") == "success":
+            for item in general_response.get("data", []):
+                general_subjects.append({
+                    "name": item.get("name", ""),
+                    "description": item.get("description", ""),
+                    "subject_agent_id": item.get("subject_agent_id", "")
+                })
+
+    except Exception as e:
+        print("General fetch error:", e)
+
+    # ------------------------------------------------
+    # Final Response
+    # ------------------------------------------------
+    return {
+        "student_subjects": student_subjects,
+        "general_subjects": general_subjects
+    }

@@ -1,27 +1,39 @@
 import logging
 import os
 from pymongo import MongoClient
+from pymongo.errors import PyMongoError
+from dotenv import load_dotenv
+load_dotenv()
+# ------------------------------------------------------------------------------
+# Configuration
+# ------------------------------------------------------------------------------
 
 logger = logging.getLogger("collections")
+logging.basicConfig(level=logging.INFO)
+
 MONGODB_URI = os.environ.get("MONGODB_URI")
+
+if not MONGODB_URI:
+    raise ValueError("MONGODB_URI environment variable is not set")
 
 SYSTEM_DBS = {"admin", "local", "config", "teacher_ai"}
 
-import logging
-import os
-from pymongo import MongoClient
+# ------------------------------------------------------------------------------
+# Single Global MongoDB Client (Thread-safe & Reusable)
+# ------------------------------------------------------------------------------
 
-logger = logging.getLogger("collections")
-MONGODB_URI = os.environ.get("MONGODB_URI")
+client = MongoClient(MONGODB_URI)
 
-SYSTEM_DBS = {"admin", "local", "config", "teacher_ai"}
+
+# ------------------------------------------------------------------------------
+# Get All Agents From All Classes
+# ------------------------------------------------------------------------------
 
 def list_all_collections():
     """
-    Returns all agents with metadata and key performance metrics
+    Returns all agents with metadata and performance metrics
     """
     try:
-        client = MongoClient(MONGODB_URI)
         result = []
 
         for db_name in client.list_database_names():
@@ -33,7 +45,6 @@ def list_all_collections():
             for collection_name in db.list_collection_names():
                 collection = db[collection_name]
 
-                # Find first document with agent_metadata.description
                 doc = collection.find_one(
                     {"agent_metadata.description": {"$exists": True}},
                     {
@@ -68,47 +79,61 @@ def list_all_collections():
 
         return {
             "status": "success",
+            "agent_count": len(result),
             "agents": result
         }
 
-    except Exception as e:
-        logger.error(f"❌ Error fetching agents: {e}")
-        return {
-            "status": "error",
-            "message": str(e)
-        }
+    except PyMongoError as e:
+        logger.error(f"MongoDB error in list_all_collections: {e}")
+        return {"status": "error", "message": str(e)}
 
-# get all agent by class name-------------------------------------------------------------
+    except Exception as e:
+        logger.error(f"Unexpected error in list_all_collections: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+# ------------------------------------------------------------------------------
+# Get All Agents of a Specific Class
+# ------------------------------------------------------------------------------
 
 def get_all_agents_of_class(class_name):
+    """
+    Returns all agents belonging to a specific class (database)
+    """
     try:
-        client = MongoClient(MONGODB_URI)
-        result = []
-
-        if class_name in SYSTEM_DBS or class_name not in client.list_database_names():
+        if class_name in SYSTEM_DBS:
             return {
                 "status": "error",
-                "message": f"Class '{class_name}' does not exist or is excluded."
+                "message": f"Class '{class_name}' is excluded."
+            }
+
+        if class_name not in client.list_database_names():
+            return {
+                "status": "error",
+                "message": f"Class '{class_name}' does not exist."
             }
 
         db = client[class_name]
+        result = []
 
         for collection_name in db.list_collection_names():
             collection = db[collection_name]
 
-            # Only one document per collection
             doc = collection.find_one(
                 {"agent_metadata.description": {"$exists": True}},
-                {"agent_metadata.agent_name": 1,
-                 "agent_metadata.agent_type": 1,
-                 "agent_metadata.description": 1,
-                 "subject_agent_id": 1}
+                {
+                    "agent_metadata.agent_name": 1,
+                    "agent_metadata.agent_type": 1,
+                    "agent_metadata.description": 1,
+                    "subject_agent_id": 1
+                }
             )
 
             if not doc:
-                continue  # skip collections with no agent
+                continue
 
             agent = doc.get("agent_metadata", {})
+
             result.append({
                 "class": class_name,
                 "subject": collection_name,
@@ -118,17 +143,69 @@ def get_all_agents_of_class(class_name):
                 "subject_agent_id": doc.get("subject_agent_id")
             })
 
-        agent_count = len(result)
-
         return {
             "status": "success",
-            "agent_count": agent_count,
+            "agent_count": len(result),
             "agents": result
         }
 
+    except PyMongoError as e:
+        logger.error(f"MongoDB error in get_all_agents_of_class: {e}")
+        return {"status": "error", "message": str(e)}
+
     except Exception as e:
-        logger.error(f"❌ Error fetching agents for class {class_name}: {e}")
-        return {
-            "status": "error",
-            "message": str(e)
-        }
+        logger.error(f"Unexpected error in get_all_agents_of_class: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+# ------------------------------------------------------------------------------
+# Get General Collection (teacher_ai.general)
+# ------------------------------------------------------------------------------
+def get_general_collection():
+    try:
+        db = client["general"]
+        subjects = []
+        seen_agents = set()
+
+        for col_name in db.list_collection_names():
+            collection = db[col_name]
+
+            cursor = collection.find(
+                {
+                    "agent_metadata.agent_name": {"$exists": True},
+                    "agent_metadata.agent_type": "teacher"
+                },
+                {
+                    "_id": 0,
+                    "agent_metadata.agent_name": 1,
+                    "agent_metadata.description": 1,
+                    "subject_agent_id": 1
+                }
+            )
+
+            for doc in cursor:
+                agent_metadata = doc.get("agent_metadata", {})
+                agent_name = agent_metadata.get("agent_name")
+                subject_agent_id = doc.get("subject_agent_id")
+
+                if not agent_name or not subject_agent_id:
+                    continue
+
+                if subject_agent_id in seen_agents:
+                    continue
+
+                seen_agents.add(subject_agent_id)
+
+                subjects.append({
+                    "name": agent_name,
+                    "description": agent_metadata.get("description", ""),
+                    "subject_agent_id": subject_agent_id,
+                    "collection_name": col_name
+                })
+
+        subjects.sort(key=lambda x: x["name"].lower())
+
+        return {"status": "success", "data": subjects}
+
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
