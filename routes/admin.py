@@ -6,6 +6,8 @@ from studentProfileDetails.agents.mainAgent import (
 )
 from studentProfileDetails.auth.dependencies import require_role
 from studentProfileDetails.managers.admin_manager import AdminManager
+from studentProfileDetails.db_utils import StudentManager
+from Teacher_AI_Agent.dbFun.collections import list_all_collections
 
 router = APIRouter()
 
@@ -30,4 +32,31 @@ def list_admins(current_user: dict = Depends(require_role("admin"))):
     return {
         "total": len(admins),
         "admins": admins
+    }
+
+@router.get("/dashboard-counts")
+def get_dashboard_stats(current_user: dict = Depends(require_role("admin"))):
+    """Get dashboard statistics: all students, total agents, and total conversations."""
+    # Get all students
+    student_manager = StudentManager()
+    students = student_manager.list_students()
+    
+    # Get all agents with their conversation counts
+    agents_data = list_all_collections()
+    total_agents = 0
+    total_conversations = 0
+    
+    if agents_data["status"] == "success":
+        agents = agents_data.get("agents", [])
+        total_agents = len(agents)
+        total_conversations = sum(agent.get("total_conversations", 0) for agent in agents)
+    
+    return {
+        "students": {
+            "total": len(students)
+        },
+        "agents": {
+            "total": total_agents,
+            "total_conversations": total_conversations
+        }
     }
