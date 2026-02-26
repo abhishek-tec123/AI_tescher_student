@@ -1,13 +1,13 @@
 {
   "e8e9431e-bd7c-4f56-b1a2-bcaaaefdc63e": {
     "id": "e8e9431e-bd7c-4f56-b1a2-bcaaaefdc63e",
-    "name": "Respectful Communication",
-    "content": "Always communicate respectfully with students. Use encouraging language and avoid criticism.",
+    "name": "Updated Respectful Communication",
+    "content": "Always communicate respectfully with students. Use encouraging and positive language.",
     "priority": 1,
     "enabled": true,
-    "version": "v3",
+    "version": "v2",
     "created_at": "2026-02-26T17:40:17.045057",
-    "updated_at": "2026-02-26T17:40:17.045289"
+    "updated_at": "2026-02-26T19:09:21.569863"
   },
   "eebc7b70-5eaa-436e-886a-a718c48460f1": {
     "id": "eebc7b70-5eaa-436e-886a-a718c48460f1",

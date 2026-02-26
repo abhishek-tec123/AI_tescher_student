@@ -121,8 +121,118 @@ def embed_query(query: str, embedding_model) -> list:
 # -----------------------------
 # Vector search helpers
 # -----------------------------
-def find_similar_chunks(query_embedding, collection, num_candidates=100, limit=TOP_K, index_name=VECTOR_INDEX_NAME):
-    """MongoDB Atlas vector search."""
+def fallback_text_search(query, collection, limit=TOP_K):
+    """Fallback text-based search using MongoDB text search when vector index is not available."""
+    try:
+        collection_name = collection.name
+        db_name = collection.database.name
+        logger.info(f"[FallbackSearch] Using text search in {db_name}.{collection_name}")
+        
+        # Create a simple text search using regex and text matching
+        # Extract key terms from the query
+        query_terms = query.lower().split()
+        query_terms = [term.strip("?.,!;:") for term in query_terms if len(term) > 2]
+        
+        # Build search pipeline
+        pipeline = []
+        
+        if query_terms:
+            # Create regex patterns - prioritize exact matches first
+            patterns = []
+            
+            # Add exact word matches for first term (highest priority)
+            if query_terms[0]:
+                patterns.append({"chunk.text": {"$regex": r"\b" + query_terms[0] + r"\b", "$options": "i"}})
+            
+            # Add partial matches for all terms
+            for term in query_terms[:3]:
+                patterns.append({"chunk.text": {"$regex": term, "$options": "i"}})
+            
+            # Match documents containing any query term
+            pipeline.append({
+                "$match": {
+                    "$or": patterns
+                }
+            })
+            
+            # Sort by text length (shorter, more focused content gets higher score)
+            pipeline.append({
+                "$addFields": {
+                    "text_length": {"$strLenCP": "$chunk.text"}
+                }
+            })
+            
+            # Sort by text length (ascending) and then by exact match priority
+            pipeline.append({
+                "$sort": {"text_length": 1}
+            })
+            
+        else:
+            # If no query terms, just sample
+            pipeline.append({"$sample": {"size": limit}})
+        
+        # Limit results
+        pipeline.append({"$limit": limit})
+        
+        # Project final results with dynamic scoring
+        pipeline.append({
+            "$project": {
+                "chunk_text": "$chunk.text",
+                "score": {
+                    "$switch": {
+                        "branches": [
+                            # Short, focused content gets higher score
+                            {"case": {"$lt": [{"$strLenCP": "$chunk.text"}, 500]}, "then": 0.8},
+                            {"case": {"$lt": [{"$strLenCP": "$chunk.text"}, 1000]}, "then": 0.7},
+                            {"case": {"$lt": [{"$strLenCP": "$chunk.text"}, 2000]}, "then": 0.6}
+                        ],
+                        "default": 0.5
+                    }
+                },
+                "unique_id": "$document.doc_unique_id",
+                "unique_chunk_id": "$chunk.unique_chunk_id",
+                "subject_agent_id": "$subject_agent_id",
+                "document_id": "$document_id",
+                "document": "$document",
+                "chunk": "$chunk",
+                "agent_metadata": "$agent_metadata"
+            }
+        })
+        
+        results = list(collection.aggregate(pipeline))
+        logger.info(f"[FallbackSearch] Text search returned {len(results)} results")
+        
+        return results
+        
+    except Exception as e:
+        logger.error(f"[FallbackSearch] Text search failed: {e}")
+        # Fallback to simple sampling if regex search fails
+        try:
+            pipeline = [
+                {"$sample": {"size": limit}},
+                {
+                    "$project": {
+                        "chunk_text": "$chunk.text",
+                        "score": {"$literal": 0.3},  # Lower score for pure sampling
+                        "unique_id": "$document.doc_unique_id",
+                        "unique_chunk_id": "$chunk.unique_chunk_id",
+                        "subject_agent_id": "$subject_agent_id",
+                        "document_id": "$document_id",
+                        "document": "$document",
+                        "chunk": "$chunk",
+                        "agent_metadata": "$agent_metadata"
+                    }
+                }
+            ]
+            results = list(collection.aggregate(pipeline))
+            logger.info(f"[FallbackSearch] Sampling fallback returned {len(results)} results")
+            return results
+        except Exception as e2:
+            logger.error(f"[FallbackSearch] Even sampling failed: {e2}")
+            return []
+
+def find_similar_chunks(query_embedding, collection, query="", num_candidates=100, limit=TOP_K, index_name=VECTOR_INDEX_NAME):
+    """MongoDB Atlas vector search with fallback to text search."""
     try:
         # Debug: Check collection info
         collection_name = collection.name
@@ -134,43 +244,53 @@ def find_similar_chunks(query_embedding, collection, num_candidates=100, limit=T
         docs_with_embeddings = collection.count_documents({"embedding.vector": {"$exists": True}})
         logger.info(f"[VectorSearch] Collection has {total_docs} total docs, {docs_with_embeddings} with embeddings")
         
-        pipeline = [
-            {
-                "$vectorSearch": {
-                    "index": index_name,
-                    # Match the stored schema: embedding vector is nested
-                    "path": VECTOR_PATH,
-                    "queryVector": query_embedding,
-                    "numCandidates": num_candidates,
-                    "limit": limit
+        # Try vector search first
+        try:
+            pipeline = [
+                {
+                    "$vectorSearch": {
+                        "index": index_name,
+                        # Match the stored schema: embedding vector is nested
+                        "path": VECTOR_PATH,
+                        "queryVector": query_embedding,
+                        "numCandidates": num_candidates,
+                        "limit": limit
+                    }
+                },
+                {
+                    "$project": {
+                        # Normalize fields into a flat structure expected downstream
+                        "chunk_text": "$chunk.text",
+                        "score": {"$meta": "vectorSearchScore"},
+                        "unique_id": "$document.doc_unique_id",
+                        "unique_chunk_id": "$chunk.unique_chunk_id",
+                        "subject_agent_id": "$subject_agent_id",
+                        "document_id": "$document_id",
+                        "document": "$document",
+                        "chunk": "$chunk",
+                        "agent_metadata": "$agent_metadata"
+                    }
                 }
-            },
-            {
-                "$project": {
-                    # Normalize fields into a flat structure expected downstream
-                    "chunk_text": "$chunk.text",
-                    "score": {"$meta": "vectorSearchScore"},
-                    "unique_id": "$document.doc_unique_id",
-                    "unique_chunk_id": "$chunk.unique_chunk_id",
-                    "subject_agent_id": "$subject_agent_id",
-                    "document_id": "$document_id",
-                    "document": "$document",
-                    "chunk": "$chunk",
-                    "agent_metadata": "$agent_metadata"
-                }
-            }
-        ]
+            ]
+            
+            results = list(collection.aggregate(pipeline))
+            logger.info(f"[VectorSearch] Atlas search returned {len(results)} results")
+            
+            if results:
+                # Debug: Log first result structure
+                logger.debug(f"[VectorSearch] First result keys: {list(results[0].keys())}")
+                logger.debug(f"[VectorSearch] First result subject_agent_id: {results[0].get('subject_agent_id')}")
+                logger.debug(f"[VectorSearch] First result score: {results[0].get('score')}")
+                return results
+            
+        except Exception as vector_error:
+            logger.warning(f"[VectorSearch] Vector search failed: {vector_error}")
+            logger.info("[VectorSearch] Falling back to text search")
         
-        results = list(collection.aggregate(pipeline))
-        logger.info(f"[VectorSearch] Atlas search returned {len(results)} results")
+        # Fallback to text search if vector search fails or returns no results
+        logger.info("[VectorSearch] Using fallback text search")
+        return fallback_text_search(query, collection, limit)
         
-        # Debug: Log first result structure
-        if results:
-            logger.debug(f"[VectorSearch] First result keys: {list(results[0].keys())}")
-            logger.debug(f"[VectorSearch] First result subject_agent_id: {results[0].get('subject_agent_id')}")
-            logger.debug(f"[VectorSearch] First result score: {results[0].get('score')}")
-        
-        return results
     except Exception as e:
         logger.warning(f"[VectorSearch] Atlas search failed: {e}")
         import traceback
@@ -337,7 +457,7 @@ def retrieve_chunk_for_query_send_to_llm(
     # -----------------------------
     # Retrieve chunks
     # -----------------------------
-    results = find_similar_chunks(query_embedding, collection, limit=top_k)
+    results = find_similar_chunks(query_embedding, collection, query, limit=top_k)
 
     if not results:
         logger.info("[VectorSearch] No results from Atlas, using in-memory fallback.")
