@@ -114,11 +114,16 @@ def create_vector_and_store_in_atlas(
     for entry in vector:
         entry["subject_agent_id"] = subject_agent_id
     
-    # ✅ Attach agent metadata safely
+    # ✅ Attach agent metadata safely with global settings defaults
     if agent_metadata:
-        logger.info(f"Attaching agent metadata: {agent_metadata}")
+        # Ensure global settings are properly set with defaults
+        processed_metadata = agent_metadata.copy()
+        processed_metadata.setdefault("global_prompt_enabled", False)
+        processed_metadata.setdefault("global_rag_enabled", False)
+        
+        logger.info(f"Attaching agent metadata with global settings: {processed_metadata}")
         for entry in vector:
-            entry["agent_metadata"] = agent_metadata
+            entry["agent_metadata"] = processed_metadata
     
     # ✅ NEW: Add performance tracking key to each entry
     performance_data = {

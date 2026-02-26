@@ -89,6 +89,10 @@ async def create_vectors(
     agent_name: Optional[str] = Form(None),
     description: Optional[str] = Form(None),
     teaching_tone: Optional[str] = Form(None),
+    
+    # Global settings
+    global_prompt_enabled: bool = Form(False),
+    global_rag_enabled: bool = Form(False),
 
     files: Optional[List[UploadFile]] = File(None)
 ):
@@ -110,6 +114,8 @@ async def create_vectors(
         files=files,
         embedding_model=request.app.state.embedding_model,
         agent_metadata=agent_metadata,
+        global_prompt_enabled=global_prompt_enabled,
+        global_rag_enabled=global_rag_enabled,
     )
 
     # Add mode info to response
@@ -244,6 +250,8 @@ async def update_agent(
     agent_name: str | None = Form(None),
     description: str | None = Form(None),
     teaching_tone: str | None = Form(None),
+    global_prompt_enabled: bool = Form(False),
+    global_rag_enabled: bool = Form(False),
     files: Optional[List[UploadFile]] = None,
 ):
     return await update_agent_data(
@@ -254,6 +262,8 @@ async def update_agent(
         agent_name=agent_name,
         description=description,
         teaching_tone=teaching_tone,
+        global_prompt_enabled=global_prompt_enabled,
+        global_rag_enabled=global_rag_enabled,
         files=files,
         embedding_model=request.app.state.embedding_model,
         create_vectors_service=request.app.state.create_vectors_service

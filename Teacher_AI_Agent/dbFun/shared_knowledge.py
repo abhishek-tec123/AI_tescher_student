@@ -44,7 +44,25 @@ class SharedKnowledgeManager:
         # Check if document name already exists
         existing = self.collection.find_one({"document_name": document_name})
         if existing:
-            raise HTTPException(status_code=400, detail="Document with this name already exists")
+            # Return existing document instead of creating duplicate
+            logger.info(f"Document '{document_name}' already exists, returning existing document")
+            return {
+                "status": "success",
+                "message": f"Document '{document_name}' already exists",
+                "document_id": existing.get("document_id"),
+                "document_name": existing.get("document_name"),
+                "description": existing.get("description", ""),
+                "upload_date": existing.get("upload_date"),
+                "status": existing.get("status", "indexed"),
+                "indexed_chunks": existing.get("indexed_chunks", 0),
+                "total_chunks": existing.get("total_chunks", 0),
+                "file_count": len(existing.get("file_names", [])),
+                "file_names": existing.get("file_names", []),
+                "estimated_size": existing.get("estimated_size", "Unknown"),
+                "used_by_count": len(existing.get("used_by_agents", [])),
+                "used_by_agents": existing.get("used_by_agents", []),
+                "is_existing": True
+            }
         
         # Process files
         file_inputs = []

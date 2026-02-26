@@ -102,96 +102,108 @@ def retrieve_chunks_with_shared_knowledge(
         except Exception as e:
             logger.error(f"Failed to search agent collection: {e}")
 
-    # 2. Get shared knowledge documents (if agent has enabled any)
+    # 2. Get shared knowledge documents (if agent has enabled any AND global RAG is enabled for this agent)
     if subject_agent_id:
         try:
-            enabled_shared_docs = shared_knowledge_manager.get_agent_enabled_documents(subject_agent_id)
-            logger.info(f"Found {len(enabled_shared_docs)} enabled shared documents for agent {subject_agent_id}")
+            # First, get agent metadata to check if global RAG is enabled
+            agent_global_rag_enabled = False
+            try:
+                from Teacher_AI_Agent.dbFun.get_agent_data import get_agent_data
+                agent_data = get_agent_data(subject_agent_id)
+                agent_metadata = agent_data.get("agent_metadata", {})
+                agent_global_rag_enabled = agent_metadata.get("global_rag_enabled", False)
+                logger.info(f"Agent {subject_agent_id} global RAG enabled: {agent_global_rag_enabled}")
+            except Exception as e:
+                logger.warning(f"Failed to get agent metadata for {subject_agent_id}: {e}")
+                agent_global_rag_enabled = False
             
-            if enabled_shared_docs:
-                client = MongoClient(MONGODB_URI)
-                shared_collection = client["teacher_ai"]["shared_knowledge"]
+            # Only proceed with shared knowledge if agent has global RAG enabled
+            if agent_global_rag_enabled:
+                enabled_shared_docs = shared_knowledge_manager.get_agent_enabled_documents(subject_agent_id)
+                logger.info(f"Found {len(enabled_shared_docs)} enabled shared documents for agent {subject_agent_id}")
                 
-                for shared_doc in enabled_shared_docs:
-                    try:
-                        doc_id = shared_doc["document_id"]
-                        doc_name = shared_doc["document_name"]
-                        logger.info(f"Searching in shared document: {doc_name} (ID: {doc_id})")
+                if enabled_shared_docs:
+                    client = MongoClient(MONGODB_URI)
+                    shared_collection = client["teacher_ai"]["shared_knowledge"]
+                    
+                    for shared_doc in enabled_shared_docs:
+                        try:
+                            doc_id = shared_doc["document_id"]
+                            doc_name = shared_doc["document_name"]
+                            logger.info(f"Searching in shared document: {doc_name} (ID: {doc_id})")
+                            
+                            # Search within this shared document
+                            logger.info(f"Performing vector search on shared collection 'teacher_ai.shared_knowledge'")
+                            shared_results = find_similar_chunks(
+                                query_embedding, 
+                                shared_collection, 
+                                limit=top_k // len(enabled_shared_docs) if enabled_shared_docs else top_k
+                            )
                         
-                        # Search within this shared document
-                        logger.info(f"Performing vector search on shared collection 'teacher_ai.shared_knowledge'")
-                        shared_results = find_similar_chunks(
-                            query_embedding, 
-                            shared_collection, 
-                            limit=top_k // len(enabled_shared_docs) if enabled_shared_docs else top_k
-                        )
-                        
-                        logger.info(f"Found {len(shared_results)} total chunks in shared collection before filtering")
+                            logger.info(f"Found {len(shared_results)} total chunks in shared collection before filtering")
                         
                         # Debug: Check if collection has any documents at all
-                        total_docs = shared_collection.count_documents({})
-                        logger.info(f"Shared collection has {total_docs} total documents")
-                        
-                        # Debug: Check if documents have embeddings
-                        docs_with_embeddings = shared_collection.count_documents({"embedding.vector": {"$exists": True}})
-                        logger.info(f"Shared collection has {docs_with_embeddings} documents with embeddings")
-                        
-                        # Debug: Sample one document to see its structure
-                        sample_doc = shared_collection.find_one()
-                        if sample_doc:
-                            logger.debug(f"Sample shared document keys: {list(sample_doc.keys())}")
-                            if "subject_agent_id" in sample_doc:
-                                logger.debug(f"Sample subject_agent_id: {sample_doc['subject_agent_id']}")
-                        
-                        # Debug: Log first few results if any
-                        if shared_results:
-                            logger.debug(f"First shared result keys: {list(shared_results[0].keys()) if shared_results else 'None'}")
-                            for i, result in enumerate(shared_results[:2]):
-                                logger.debug(f"Shared result {i}: subject_agent_id={result.get('subject_agent_id')}, score={result.get('score')}")
-                        
-                        # Filter results to only include chunks from this document
-                        # Check multiple possible ID fields that might be in the chunk
-                        filtered_shared_results = []
-                        for result in shared_results:
-                            # Log the chunk structure for debugging
-                            chunk_debug = {
-                                "unique_id": result.get("unique_id", ""),
-                                "unique_chunk_id": result.get("unique_chunk_id", ""),
-                                "subject_agent_id": result.get("subject_agent_id", ""),
-                                "document_id": result.get("document_id", ""),
-                                "doc_unique_id": result.get("document", {}).get("doc_unique_id", "")
-                            }
-                            logger.debug(f"Chunk debug info: {chunk_debug}")
+                            total_docs = shared_collection.count_documents({})
+                            logger.info(f"Shared collection has {total_docs} total documents")
                             
-                            # Check if this chunk belongs to the current shared document
-                            is_match = (
-                                result.get("unique_id", "").startswith(doc_id) or
-                                result.get("unique_chunk_id", "").startswith(doc_id) or
-                                result.get("subject_agent_id", "") == doc_id or
-                                result.get("document_id", "") == doc_id or
-                                result.get("document", {}).get("doc_unique_id", "").startswith(doc_id)
-                            )
+                            # Debug: Check if documents have embeddings
+                            docs_with_embeddings = shared_collection.count_documents({"embedding.vector": {"$exists": True}})
+                            logger.info(f"Shared collection has {docs_with_embeddings} documents with embeddings")
                             
-                            if is_match:
-                                result["source_type"] = "shared"
-                                result["source_name"] = doc_name
-                                result["document_id"] = doc_id
-                                filtered_shared_results.append(result)
+                            # Debug: Sample one document to see its structure
+                            sample_doc = shared_collection.find_one()
+                            if sample_doc:
+                                logger.debug(f"Sample shared document keys: {list(sample_doc.keys())}")
+                                if "subject_agent_id" in sample_doc:
+                                    logger.debug(f"Sample subject_agent_id: {sample_doc['subject_agent_id']}")
+                            
+                            # Debug: Log first few results if any
+                            if shared_results:
+                                logger.debug(f"First shared result keys: {list(shared_results[0].keys()) if shared_results else 'None'}")
+                                for i, result in enumerate(shared_results[:2]):
+                                    logger.debug(f"Shared result {i}: subject_agent_id={result.get('subject_agent_id')}, score={result.get('score')}")
+                            
+                            # Filter results to only include chunks from this document
+                            # Check multiple possible ID fields that might be in the chunk
+                            filtered_shared_results = []
+                            for result in shared_results:
+                                # Log the chunk structure for debugging
+                                chunk_debug = {
+                                    "subject_agent_id": result.get("subject_agent_id", ""),
+                                    "document_id": result.get("document_id", ""),
+                                    "doc_unique_id": result.get("document", {}).get("doc_unique_id", "")
+                                }
+                                logger.debug(f"Chunk debug info: {chunk_debug}")
+                                
+                                # Check if this chunk belongs to the current shared document
+                                is_match = (
+                                    result.get("subject_agent_id", "") == doc_id or
+                                    result.get("document_id", "") == doc_id or
+                                    result.get("document", {}).get("doc_unique_id", "") == doc_id
+                                )
+                                
+                                logger.debug(f"Is match: {is_match}")
+                                
+                                if is_match:
+                                    result["source_type"] = "shared"
+                                    result["source_name"] = doc_name
+                                    result["document_id"] = doc_id
+                                    filtered_shared_results.append(result)
+                            
+                            all_results.extend(filtered_shared_results)
+                            sources_info.append({
+                                "type": "shared",
+                                "name": doc_name,
+                                "document_id": doc_id,
+                                "results_count": len(filtered_shared_results)
+                            })
+                            
+                            logger.info(f"Retrieved {len(filtered_shared_results)} chunks from shared document '{doc_name}' (filtered from {len(shared_results)} total)")
                         
-                        all_results.extend(filtered_shared_results)
-                        sources_info.append({
-                            "type": "shared",
-                            "name": doc_name,
-                            "document_id": doc_id,
-                            "results_count": len(filtered_shared_results)
-                        })
-                        
-                        logger.info(f"Retrieved {len(filtered_shared_results)} chunks from shared document '{doc_name}' (filtered from {len(shared_results)} total)")
-                    
-                    except Exception as e:
-                        logger.error(f"Failed to search shared document {shared_doc['document_name']}: {e}")
-                        import traceback
-                        logger.error(f"Search error traceback: {traceback.format_exc()}")
+                        except Exception as e:
+                            logger.error(f"Failed to search shared document {shared_doc['document_name']}: {e}")
+                            import traceback
+                            logger.error(f"Search error traceback: {traceback.format_exc()}")
         
         except Exception as e:
             logger.error(f"Failed to get enabled shared documents: {e}")

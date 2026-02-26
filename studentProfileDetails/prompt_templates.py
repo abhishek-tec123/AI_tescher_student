@@ -226,7 +226,7 @@ def build_teacher_prompt(
         confusion_type: Type of confusion detected
         session_context: Previous conversation context
         current_query: Current student question
-        agent_metadata: Agent metadata for introductions (optional)
+        agent_metadata: Agent metadata for introductions and global settings (optional)
         base_prompt: Custom base prompt (optional, defaults to BASE_TEACHER_PROMPT)
     
     Returns:
@@ -264,8 +264,23 @@ Example: "Hello! I'm {agent_name}. {description}"
 
 """
 
+    # Check for global prompt usage
+    global_prompt_content = ""
+    if agent_metadata and agent_metadata.get("global_prompt_enabled", False):
+        try:
+            from studentProfileDetails.global_prompts import get_highest_priority_enabled_prompt
+            global_prompt = get_highest_priority_enabled_prompt()
+            if global_prompt:
+                global_prompt_content = global_prompt.get("content", "")
+        except ImportError:
+            # If global_prompts module is not available, skip
+            pass
+
+    # Build the prompt with global prompt if available
     prompt = f"""
 {base_prompt}
+
+{global_prompt_content}
 
 {agent_introduction}
 You are an expert and supportive school teacher.
@@ -318,11 +333,19 @@ Avoid robotic formatting.
 
     prompt += f"\nCRITICAL: The 'Topic: <Main topic>' header below MUST strictly align with the student's CURRENT question: '{current_query}'\n"
     
-    # Add Global RAG content if enabled (imported to avoid circular dependency)
+    # Add Global RAG content if enabled for this specific agent
     try:
         from studentProfileDetails.global_settings import get_global_rag_settings
         global_rag_settings = get_global_rag_settings()
-        if global_rag_settings.get("enabled", False) and global_rag_settings.get("content", ""):
+        
+        # Check if global RAG is enabled system-wide AND for this specific agent
+        agent_global_rag_enabled = False
+        if agent_metadata:
+            agent_global_rag_enabled = agent_metadata.get("global_rag_enabled", False)
+        
+        if (global_rag_settings.get("enabled", False) and 
+            global_rag_settings.get("content", "") and 
+            agent_global_rag_enabled):
             prompt += f"\n\n--- GLOBAL RAG CONTEXT ---\n{global_rag_settings['content']}\n--- END GLOBAL RAG CONTEXT ---\n"
     except ImportError:
         # If global_settings is not available, skip RAG content

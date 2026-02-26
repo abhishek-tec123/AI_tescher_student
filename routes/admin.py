@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, UploadFile, File, Form, Request
+from fastapi import APIRouter, Depends, UploadFile, File, Form, Request, HTTPException
+import os
+import logging
 from studentProfileDetails.agents.mainAgent import (
     get_base_prompt,
     update_base_prompt_handler,
@@ -24,6 +26,20 @@ from studentProfileDetails.prompt_templates import (
     build_teacher_prompt
 )
 from Teacher_AI_Agent.dbFun.shared_knowledge import shared_knowledge_manager
+from studentProfileDetails.global_prompts import (
+    create_global_prompt,
+    get_all_prompts,
+    get_prompt_by_id,
+    update_prompt,
+    delete_prompt,
+    enable_prompt,
+    disable_prompt,
+    get_enabled_prompts,
+    get_highest_priority_enabled_prompt
+)
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -34,6 +50,18 @@ DUMMY_QUERY = "What is photosynthesis?"
 
 class GlobalRagRequest(BaseModel):
     content: str
+
+class GlobalPromptRequest(BaseModel):
+    name: str
+    content: str
+    priority: int = 1
+    version: str = "v1"
+
+class GlobalPromptUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    content: Optional[str] = None
+    priority: Optional[int] = None
+    version: Optional[str] = None
 
 @router.post("/update-base-prompt")
 def update_base_prompt(
@@ -368,3 +396,321 @@ def list_global_rag_knowledge(current_user: dict = Depends(require_role("admin")
     except Exception as e:
         from fastapi import HTTPException
         raise HTTPException(status_code=500, detail=f"Failed to list global RAG knowledge: {str(e)}")
+
+# =====================================================
+# AGENT GLOBAL SETTINGS MANAGEMENT
+# =====================================================
+
+class AgentGlobalSettingsRequest(BaseModel):
+    agent_id: str
+    global_prompt_enabled: bool = False
+    global_rag_enabled: bool = False
+
+@router.post("/agents/{agent_id}/global-settings")
+def update_agent_global_settings(
+    agent_id: str,
+    payload: AgentGlobalSettingsRequest,
+    current_user: dict = Depends(require_role("admin"))
+):
+    """Update global settings for a specific agent."""
+    try:
+        from Teacher_AI_Agent.dbFun.get_agent_data import get_agent_data
+        from pymongo import MongoClient
+        
+        # Get agent data to find the database and collection
+        agent_data = get_agent_data(agent_id)
+        if not agent_data:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        
+        # Update agent metadata with global settings
+        mongodb_uri = os.environ.get("MONGODB_URI")
+        if not mongodb_uri:
+            raise HTTPException(status_code=500, detail="MongoDB URI not configured")
+        
+        client = MongoClient(mongodb_uri)
+        db = client[agent_data["class"]]
+        collection = db[agent_data["subject"]]
+        
+        # Update all documents for this agent with new global settings
+        result = collection.update_many(
+            {"subject_agent_id": agent_id},
+            {
+                "$set": {
+                    "agent_metadata.global_prompt_enabled": payload.global_prompt_enabled,
+                    "agent_metadata.global_rag_enabled": payload.global_rag_enabled
+                }
+            }
+        )
+        
+        # ✅ Auto-enable/disable shared documents based on new global_rag_enabled setting
+        auto_result = {"auto_enabled_shared_documents": 0, "auto_disabled_shared_documents": 0}
+        
+        try:
+            from Teacher_AI_Agent.dbFun.shared_knowledge import shared_knowledge_manager
+            
+            # Get all available shared documents
+            shared_docs_result = shared_knowledge_manager.list_shared_documents()
+            
+            if shared_docs_result.get("status") == "success" and shared_docs_result.get("documents"):
+                if payload.global_rag_enabled:
+                    # Enable shared documents for this agent
+                    enabled_count = 0
+                    for doc in shared_docs_result["documents"]:
+                        try:
+                            # Get agent details from updated payload or agent data
+                            agent_name = agent_data.get("agent_metadata", {}).get("agent_name", "")
+                            class_name = agent_data.get("class", "")
+                            subject_name = agent_data.get("subject", "")
+                            
+                            success = shared_knowledge_manager.enable_document_for_agent(
+                                doc["document_id"], 
+                                agent_id,
+                                agent_name=agent_name,
+                                class_name=class_name,
+                                subject=subject_name
+                            )
+                            if success:
+                                enabled_count += 1
+                        except Exception as e:
+                            logger.warning(f"Failed to enable document {doc['document_id']} for agent {agent_id}: {e}")
+                    
+                    if enabled_count > 0:
+                        auto_result["auto_enabled_shared_documents"] = enabled_count
+                        auto_result["shared_documents_status"] = "enabled"
+                        
+                else:
+                    # Disable shared documents for this agent
+                    disabled_count = 0
+                    for doc in shared_docs_result["documents"]:
+                        try:
+                            # Check if this agent is using this document
+                            if any(agent.get("agent_id") == agent_id for agent in doc.get("used_by_agents", [])):
+                                success = shared_knowledge_manager.disable_document_for_agent(
+                                    doc["document_id"], 
+                                    agent_id
+                                )
+                                if success:
+                                    disabled_count += 1
+                        except Exception as e:
+                            logger.warning(f"Failed to disable document {doc['document_id']} for agent {agent_id}: {e}")
+                    
+                    if disabled_count > 0:
+                        auto_result["auto_disabled_shared_documents"] = disabled_count
+                        auto_result["shared_documents_status"] = "disabled"
+                        
+        except Exception as e:
+            logger.warning(f"Failed to auto-enable/disable shared documents for agent {agent_id}: {e}")
+            auto_result["shared_documents_status"] = "error"
+        
+        return {
+            "status": "success",
+            "message": f"Updated global settings for agent {agent_id}",
+            "matched_documents": result.matched_count,
+            "modified_documents": result.modified_count,
+            "global_prompt_enabled": payload.global_prompt_enabled,
+            "global_rag_enabled": payload.global_rag_enabled,
+            **auto_result
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update agent global settings: {str(e)}")
+
+@router.get("/agents/{agent_id}/global-settings")
+def get_agent_global_settings(
+    agent_id: str,
+    current_user: dict = Depends(require_role("admin"))
+):
+    """Get current global settings for a specific agent."""
+    try:
+        from Teacher_AI_Agent.dbFun.get_agent_data import get_agent_data
+        
+        # Get agent data
+        agent_data = get_agent_data(agent_id)
+        if not agent_data:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        
+        # Extract global settings from agent metadata
+        agent_metadata = agent_data.get("agent_metadata", {})
+        
+        return {
+            "status": "success",
+            "agent_id": agent_id,
+            "global_prompt_enabled": agent_metadata.get("global_prompt_enabled", False),
+            "global_rag_enabled": agent_metadata.get("global_rag_enabled", False),
+            "agent_metadata": agent_metadata
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get agent global settings: {str(e)}")
+
+# =====================================================
+# GLOBAL PROMPTS MANAGEMENT
+# =====================================================
+
+@router.post("/global-prompts/")
+def create_global_prompt_endpoint(
+    payload: GlobalPromptRequest,
+    current_user: dict = Depends(require_role("admin"))
+):
+    """Create a new global prompt."""
+    try:
+        prompt = create_global_prompt(
+            name=payload.name,
+            content=payload.content,
+            priority=payload.priority,
+            version=payload.version
+        )
+        return {
+            "status": "success",
+            "message": f"Global prompt '{payload.name}' created successfully",
+            "prompt": prompt
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create global prompt: {str(e)}")
+
+@router.get("/global-prompts/")
+def list_global_prompts(current_user: dict = Depends(require_role("admin"))):
+    """List all global prompts."""
+    try:
+        prompts = get_all_prompts()
+        enabled_prompts = get_enabled_prompts()
+        
+        return {
+            "status": "success",
+            "total_prompts": len(prompts),
+            "enabled_prompts": len(enabled_prompts),
+            "prompts": prompts
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list global prompts: {str(e)}")
+
+@router.get("/global-prompts/{prompt_id}")
+def get_global_prompt(
+    prompt_id: str,
+    current_user: dict = Depends(require_role("admin"))
+):
+    """Get a specific global prompt."""
+    try:
+        prompt = get_prompt_by_id(prompt_id)
+        if not prompt:
+            raise HTTPException(status_code=404, detail="Global prompt not found")
+        
+        return {
+            "status": "success",
+            "prompt": prompt
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get global prompt: {str(e)}")
+
+@router.put("/global-prompts/{prompt_id}")
+def update_global_prompt_endpoint(
+    prompt_id: str,
+    payload: GlobalPromptUpdateRequest,
+    current_user: dict = Depends(require_role("admin"))
+):
+    """Update a global prompt."""
+    try:
+        # Filter out None values
+        update_data = {k: v for k, v in payload.dict().items() if v is not None}
+        
+        if not update_data:
+            raise HTTPException(status_code=400, detail="No valid fields to update")
+        
+        prompt = update_prompt(prompt_id, **update_data)
+        if not prompt:
+            raise HTTPException(status_code=404, detail="Global prompt not found")
+        
+        return {
+            "status": "success",
+            "message": f"Global prompt '{prompt.get('name')}' updated successfully",
+            "prompt": prompt
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update global prompt: {str(e)}")
+
+@router.delete("/global-prompts/{prompt_id}")
+def delete_global_prompt_endpoint(
+    prompt_id: str,
+    current_user: dict = Depends(require_role("admin"))
+):
+    """Delete a global prompt."""
+    try:
+        prompt = get_prompt_by_id(prompt_id)
+        if not prompt:
+            raise HTTPException(status_code=404, detail="Global prompt not found")
+        
+        success = delete_prompt(prompt_id)
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to delete global prompt")
+        
+        return {
+            "status": "success",
+            "message": f"Global prompt '{prompt.get('name')}' deleted successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete global prompt: {str(e)}")
+
+@router.post("/global-prompts/{prompt_id}/enable")
+def enable_global_prompt_endpoint(
+    prompt_id: str,
+    current_user: dict = Depends(require_role("admin"))
+):
+    """Enable a global prompt."""
+    try:
+        prompt = enable_prompt(prompt_id)
+        if not prompt:
+            raise HTTPException(status_code=404, detail="Global prompt not found")
+        
+        return {
+            "status": "success",
+            "message": f"Global prompt '{prompt.get('name')}' enabled successfully",
+            "prompt": prompt
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to enable global prompt: {str(e)}")
+
+@router.post("/global-prompts/{prompt_id}/disable")
+def disable_global_prompt_endpoint(
+    prompt_id: str,
+    current_user: dict = Depends(require_role("admin"))
+):
+    """Disable a global prompt."""
+    try:
+        prompt = disable_prompt(prompt_id)
+        if not prompt:
+            raise HTTPException(status_code=404, detail="Global prompt not found")
+        
+        return {
+            "status": "success",
+            "message": f"Global prompt '{prompt.get('name')}' disabled successfully",
+            "prompt": prompt
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to disable global prompt: {str(e)}")
+
+@router.get("/global-prompts/enabled/highest-priority")
+def get_highest_priority_enabled_prompt_endpoint(current_user: dict = Depends(require_role("admin"))):
+    """Get the highest priority enabled global prompt."""
+    try:
+        prompt = get_highest_priority_enabled_prompt()
+        
+        return {
+            "status": "success",
+            "prompt": prompt
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get highest priority enabled prompt: {str(e)}")
