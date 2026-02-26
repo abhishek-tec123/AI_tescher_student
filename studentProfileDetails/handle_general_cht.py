@@ -1,7 +1,8 @@
 import re
 from studentProfileDetails.generate_response_with_groq import generate_response_with_groq
 from studentProfileDetails.utils.agent_utils import get_dynamic_agent_id_for_subject  # ✅ Import dynamic agent ID mapping
-from studentProfileDetails.agents.mainAgent import detect_formal_communication, get_agent_metadata  # ✅ Import formal detection and agent metadata
+from studentProfileDetails.prompt_templates import detect_formal_communication  # ✅ Import formal detection from modular templates
+from studentProfileDetails.agents.mainAgent import get_agent_metadata  # ✅ Import agent metadata from mainAgent
 
 def is_greeting(query: str) -> bool:
     q = query.lower().strip()

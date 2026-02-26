@@ -12,6 +12,9 @@ from Teacher_AI_Agent.dbFun.classes_and_subject import (
     get_subjects_by_class,
 )
 from Teacher_AI_Agent.dbFun.collections import list_all_collections, get_all_agents_of_class
+from studentProfileDetails.auth.dependencies import get_current_user
+from studentProfileDetails.db_utils import StudentManager
+from Teacher_AI_Agent.dbFun.shared_knowledge import shared_knowledge_manager
 from pydantic import BaseModel
 
 router = APIRouter()
@@ -144,6 +147,78 @@ def collections():
 class ClassRequest(BaseModel):
     class_name: str
 
+class AgentDocumentRequest(BaseModel):
+    agent_id: str
+    agent_name: str = ""
+    class_name: str = ""
+    subject: str = ""
+
+@router.post("/{subject_agent_id}/shared-documents/enable")
+async def enable_shared_document_for_agent(
+    subject_agent_id: str,
+    payload: AgentDocumentRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Enable a shared document for a specific agent."""
+    try:
+        # Get all shared documents to find the one to enable
+        shared_docs = shared_knowledge_manager.list_shared_documents()
+        if shared_docs.get("status") != "success":
+            raise HTTPException(status_code=500, detail="Failed to fetch shared documents")
+        
+        # For now, enable all shared documents (can be made selective later)
+        enabled_count = 0
+        for doc in shared_docs["documents"]:
+            result = shared_knowledge_manager.enable_document_for_agent(
+                document_id=doc["document_id"],
+                agent_id=subject_agent_id,
+                agent_name=payload.agent_name,
+                class_name=payload.class_name,
+                subject=payload.subject
+            )
+            if result.get("status") == "success":
+                enabled_count += 1
+        
+        return {
+            "status": "success",
+            "message": f"Enabled {enabled_count} shared documents for agent",
+            "subject_agent_id": subject_agent_id
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/{subject_agent_id}/shared-documents/disable")
+async def disable_shared_document_for_agent(
+    subject_agent_id: str,
+    document_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Disable a shared document for a specific agent."""
+    try:
+        result = shared_knowledge_manager.disable_document_for_agent(
+            document_id=document_id,
+            agent_id=subject_agent_id
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/{subject_agent_id}/shared-documents")
+async def get_agent_shared_documents(
+    subject_agent_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get all shared documents enabled for a specific agent."""
+    try:
+        documents = shared_knowledge_manager.get_agent_enabled_documents(subject_agent_id)
+        return {
+            "status": "success",
+            "documents": documents,
+            "subject_agent_id": subject_agent_id
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.post("/agent_of_class")
 def agent(request: ClassRequest):
     data = get_all_agents_of_class(request.class_name)
@@ -154,8 +229,6 @@ def agent(request: ClassRequest):
 # -------------------------------------------------
 from Teacher_AI_Agent.dbFun.update_vectors import update_agent_data, delete_agent_data
 from Teacher_AI_Agent.dbFun.get_agent_data import get_agent_data
-from studentProfileDetails.db_utils import StudentManager
-from studentProfileDetails.auth.dependencies import get_current_user
 
 @router.get("/{subject_agent_id}")
 async def get_agent(subject_agent_id: str):

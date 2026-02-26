@@ -124,6 +124,16 @@ def embed_query(query: str, embedding_model) -> list:
 def find_similar_chunks(query_embedding, collection, num_candidates=100, limit=TOP_K, index_name=VECTOR_INDEX_NAME):
     """MongoDB Atlas vector search."""
     try:
+        # Debug: Check collection info
+        collection_name = collection.name
+        db_name = collection.database.name
+        logger.info(f"[VectorSearch] Searching in {db_name}.{collection_name}")
+        
+        # Debug: Check if collection has documents with embeddings
+        total_docs = collection.count_documents({})
+        docs_with_embeddings = collection.count_documents({"embedding.vector": {"$exists": True}})
+        logger.info(f"[VectorSearch] Collection has {total_docs} total docs, {docs_with_embeddings} with embeddings")
+        
         pipeline = [
             {
                 "$vectorSearch": {
@@ -141,13 +151,30 @@ def find_similar_chunks(query_embedding, collection, num_candidates=100, limit=T
                     "chunk_text": "$chunk.text",
                     "score": {"$meta": "vectorSearchScore"},
                     "unique_id": "$document.doc_unique_id",
-                    "unique_chunk_id": "$chunk.unique_chunk_id"
+                    "unique_chunk_id": "$chunk.unique_chunk_id",
+                    "subject_agent_id": "$subject_agent_id",
+                    "document_id": "$document_id",
+                    "document": "$document",
+                    "chunk": "$chunk",
+                    "agent_metadata": "$agent_metadata"
                 }
             }
         ]
-        return list(collection.aggregate(pipeline))
+        
+        results = list(collection.aggregate(pipeline))
+        logger.info(f"[VectorSearch] Atlas search returned {len(results)} results")
+        
+        # Debug: Log first result structure
+        if results:
+            logger.debug(f"[VectorSearch] First result keys: {list(results[0].keys())}")
+            logger.debug(f"[VectorSearch] First result subject_agent_id: {results[0].get('subject_agent_id')}")
+            logger.debug(f"[VectorSearch] First result score: {results[0].get('score')}")
+        
+        return results
     except Exception as e:
         logger.warning(f"[VectorSearch] Atlas search failed: {e}")
+        import traceback
+        logger.error(f"[VectorSearch] Error traceback: {traceback.format_exc()}")
         return []
 
 def find_similar_chunks_in_memory(query_embedding, collection, top_k=TOP_K):
@@ -161,6 +188,11 @@ def find_similar_chunks_in_memory(query_embedding, collection, top_k=TOP_K):
                 "chunk.text": 1,
                 "chunk.unique_chunk_id": 1,
                 "document.doc_unique_id": 1,
+                "subject_agent_id": 1,
+                "document_id": 1,
+                "document": 1,
+                "chunk": 1,
+                "agent_metadata": 1,
             },
         )
     )
@@ -193,6 +225,11 @@ def find_similar_chunks_in_memory(query_embedding, collection, top_k=TOP_K):
                 "unique_chunk_id": unique_chunk_id,
                 "chunk_text": chunk_text,
                 "score": cosine_similarity(query_embedding, embedding_vector),
+                "subject_agent_id": doc.get("subject_agent_id"),
+                "document_id": doc.get("document_id"),
+                "document": doc.get("document"),
+                "chunk": doc.get("chunk"),
+                "agent_metadata": doc.get("agent_metadata"),
             }
         )
 

@@ -4,7 +4,8 @@ from threading import Lock
 from studentProfileDetails.summrizeStdConv import summarize_text_with_groq
 from studentProfileDetails.agents.studyPlane import extract_topic_from_sentence
 from studentProfileDetails.agents.rl_optimizer import RLOptimizer
-
+from studentProfileDetails.global_settings import get_global_rag_settings
+from studentProfileDetails.prompt_templates import get_base_prompt as get_template_base_prompt, build_teacher_prompt
 
 # =====================================================
 # 🔐 IN-MEMORY PROMPT CACHE (GLOBAL, NO DB)
@@ -13,39 +14,7 @@ from studentProfileDetails.agents.rl_optimizer import RLOptimizer
 _PROMPT_LOCK = Lock()
 
 PROMPT_CACHE = {
-    "BASE_TEACHER_PROMPT": """
-You are an expert teacher AI.
-
-Core rules:
-- Be clear, calm, and encouraging
-- Never shame or discourage the student
-- Prefer intuitive explanations before formulas
-- Do not hallucinate facts
-
-Conversation handling rules:
-- Student inputs may be questions OR general information.
-- If the student provides general information about themselves,
-  their situation, or their understanding, acknowledge it briefly.
-- Do NOT reject general information for lacking academic content.
-- Store acknowledged information implicitly through the conversation.
-
-Context usage rules:
-- Treat the previous conversation as reliable context.
-- If the answer to the current input is already present in the
-  conversation history, respond using that information directly.
-- Do NOT say information is unavailable if it appears earlier.
-- CRITICAL: For personal questions (name, preferences, info shared),
-  ALWAYS search the conversation history first and use that information.
-- If a student asks "what is my name" or similar, look for where they
-  previously told you their name and answer directly.
-
-Response rules:
-- Match the student's preferences strictly.
-- Keep responses concise when requested.
-- Answer naturally and directly when no explanation is required.
-- For personal questions, be direct and use the context information.
-
-"""
+    "BASE_TEACHER_PROMPT": get_template_base_prompt()
 }
 
 def get_base_prompt() -> str:
@@ -139,44 +108,8 @@ JSON:
 
 
 # =====================================================
-# 🧱 PROMPT BUILDER (BASE + STUDENT + SESSION)
+# � AGENT METADATA HELPER
 # =====================================================
-
-def detect_formal_communication(query: str) -> bool:
-    """
-    Detect if student is using formal communication or greeting that should trigger introduction
-    """
-    formal_indicators = [
-        "sir", "ma'am", "teacher", "professor", "respected", "honored",
-        "please", "thank you", "excuse me", "pardon", "would you", "could you",
-        "may i", "can you please", "kindly", "appreciate", "grateful"
-    ]
-    
-    greeting_indicators = ["hello", "hi", "hey", "good morning", "good afternoon", "good evening"]
-    
-    query_lower = query.lower()
-    
-    # Check for formal indicators
-    formal_count = sum(1 for indicator in formal_indicators if indicator in query_lower)
-    
-    # Check for greeting indicators
-    greeting_count = sum(1 for indicator in greeting_indicators if indicator in query_lower)
-    
-    # Check for proper capitalization and punctuation
-    has_proper_capitalization = query[0].isupper() if query else False
-    has_proper_punctuation = query.endswith(('.', '?', '!')) if query else False
-    
-    # Consider it formal/introduction-worthy if:
-    # - At least 2 formal indicators, OR
-    # - 1 formal indicator + proper capitalization/punctuation, OR
-    # - Contains high-formality indicators like "sir", "ma'am", "teacher", "professor", "respected", OR
-    # - Any greeting indicator (hello, hi, etc.) - ALWAYS trigger introduction for greetings
-    high_formality_indicators = ["sir", "ma'am", "teacher", "professor", "respected", "honored"]
-    has_high_formality = any(indicator in query_lower for indicator in high_formality_indicators)
-    has_greeting = greeting_count >= 1
-    
-    return (formal_count >= 2) or (formal_count >= 1 and (has_proper_capitalization or has_proper_punctuation)) or has_high_formality or has_greeting
-
 
 def get_agent_metadata(subject_agent_id: str) -> dict:
     """
@@ -190,116 +123,8 @@ def get_agent_metadata(subject_agent_id: str) -> dict:
         print(f"Error getting agent metadata: {e}")
         return {}
 
-
-def build_teacher_prompt(
-    *,
-    student_profile: dict,
-    class_name: str,
-    subject: str,
-    confusion_type: str,
-    session_context: str,
-    current_query: str = "Current Question",
-    agent_metadata: dict = None
-) -> str:
-
-    base_prompt = get_base_prompt()
-
-    level = student_profile.get("level", "basic")
-    tone = student_profile.get("tone", "friendly")
-    learning_style = student_profile.get("learning_style", "step-by-step")
-    response_length = student_profile.get("response_length", "long")
-    include_example = student_profile.get("include_example", True)
-    common_mistakes = student_profile.get("common_mistakes", [])
-
-    # Check if formal communication is detected and add agent introduction
-    agent_introduction = ""
-    if agent_metadata and detect_formal_communication(current_query):
-        agent_name = agent_metadata.get("agent_name", "")
-        description = agent_metadata.get("description", "")
-        teaching_tone = agent_metadata.get("teaching_tone", "professional")
-        
-        if agent_name:
-            agent_introduction = f"""
-AGENT INTRODUCTION:
-When introducing yourself, use this information:
-- Name: {agent_name}
-- Description: {description}
-- Teaching Tone: {teaching_tone}
-
-Introduce yourself naturally at the beginning of your response if the student is being formal.
-Example: "Hello! I'm {agent_name}. {description}"
-
-"""
-
-    prompt = f"""
-{base_prompt}
-
-{agent_introduction}
-You are an expert and supportive school teacher.
-
-CLASS: {class_name}
-SUBJECT: {subject}
-DETECTED CONFUSION: {confusion_type}
-
-STUDENT PROFILE:
-- Level: {level}
-- Tone: {tone}
-- Learning style: {learning_style}
-- Response length: {response_length}
-- Include example: {include_example}
-- Common mistakes: {common_mistakes}
-
-IMPORTANT INSTRUCTIONS:
-
-1. Answer ONLY what the student asked.
-2. Do NOT introduce future or unrelated topics.
-3. Keep explanation appropriate for a {level} student.
-4. Follow tone: {tone}.
-5. If confusion exists, gently correct it.
-6. Follow learning style: {learning_style}.
-7. Provide slightly deeper conceptual clarity when appropriate.
-8. Do NOT use labels like "Subtopics:" or markdown formatting.
-9. Use clean plain text with this structure:
-
-Topic: **<Main topic>**
-- Clear explanation as per the student prefernce with suitable subheading.
-- Clear explanation as per the student prefernce with suitable subheading.
-
-10. If include_example is True, include one simple example naturally on a new line:
-    **Example**: *Your example here*
-
-11. If common mistakes are provided, include one brief correction section written as:
-    **Common mistake**: *Short clarification*
-
-12. End with a short encouraging sentence.
-
-Keep the response structured but natural.
-Avoid robotic formatting.
-
-13. CRITICAL: Use Unicode subscripts (₀₁₂₃₄₅₆₇₈₉) and superscripts (⁰¹²³⁴⁵⁶⁷⁸⁹) for ALL scientific notation.
-    - Chemistry: H₂O, CO₂, C₆H₁₂O₆ (use subscripts for numbers in formulas).
-    - Physics: vᵢ (initial velocity), aₙ (acceleration), 10² m/s.
-    - Math: x², (a+b)³, a₁, a₂.
-    - DO NOT use regular numbers for subscripts or superscripts.
-"""
-
-    prompt += f"\nCRITICAL: The 'Topic: <Main topic>' header below MUST strictly align with the student's CURRENT question: '{current_query}'\n"
-    
-    if session_context:
-        prompt += f"\nPrevious conversation (Last 5 turns for context only):\n{session_context}\n"
-
-    # Response length control (updated: very long, long, short only)
-    if response_length == "very long":
-        prompt += "\nProvide comprehensive detailed explanation with examples and context.\n"
-    elif response_length == "short":
-        prompt += "\nKeep response concise but structured in one short explanation.\n"
-    else:  # long (default)
-        prompt += "\nProvide detailed but focused explanation.\n"
-
-    return prompt.strip()
-
 # =====================================================
-# 👩‍🏫 TEACHER CHAT (MAIN ENTRY)
+# �‍🏫 TEACHER CHAT (MAIN ENTRY)
 # =====================================================
 
 def diagnosis_chat(
@@ -314,6 +139,11 @@ def diagnosis_chat(
     """
     Preference-aware, session-aware teacher response
     """
+
+    # -----------------------------
+    # Get global RAG settings for debug info
+    # -----------------------------
+    global_rag_settings = get_global_rag_settings()
 
     # -----------------------------
     # Diagnose confusion
@@ -417,7 +247,8 @@ def diagnosis_chat(
         confusion_type=confusion_type,
         session_context=full_context,
         current_query=query,
-        agent_metadata=agent_metadata
+        agent_metadata=agent_metadata,
+        base_prompt=get_base_prompt()  # Use the cached base prompt
     )
 
     full_prompt += f"\nOriginal Student Question:\n{query}\n"
@@ -431,6 +262,7 @@ def diagnosis_chat(
         class_name=class_name,
         subject=subject,
         student_profile=student_profile,
+        subject_agent_id=subject_agent_id,  # Pass for shared knowledge
         top_k=top_k
     )
 
@@ -455,7 +287,22 @@ def diagnosis_chat(
         "confusion_type": confusion_type,
         "profile": student_profile,
         "quality_scores": quality_scores,
-        "rl_metadata": rl_metadata
+        "rl_metadata": rl_metadata,
+        "debug_info": {
+            "actual_prompt": full_prompt,
+            "prompt_length": len(full_prompt),
+            "rag_enabled": global_rag_settings.get("enabled", False),
+            "rag_content_length": len(global_rag_settings.get("content", "")) if global_rag_settings.get("enabled", False) else 0,
+            "base_prompt": build_teacher_prompt(
+                student_profile=student_profile,
+                class_name=class_name,
+                subject=subject,
+                confusion_type=confusion_type,
+                session_context=full_context,
+                current_query=query,
+                agent_metadata=agent_metadata
+            ).replace(f"\n\n--- GLOBAL RAG CONTEXT ---\n{global_rag_settings.get('content', '')}\n--- END GLOBAL RAG CONTEXT ---\n", "") if global_rag_settings.get("enabled", False) else full_prompt
+        }
     }
 
 def set_base_prompt(new_prompt: str):

@@ -29,7 +29,7 @@ if _parent_dir not in sys.path:
 # Imports
 # -----------------------------
 from Teacher_AI_Agent.model_cache import model_cache
-from search.SimilaritySearch import retrieve_chunk_for_query_send_to_llm
+from search.EnhancedSimilaritySearch import retrieve_chunk_for_query_send_to_llm_enhanced
 
 # -----------------------------
 # Logging
@@ -84,6 +84,7 @@ class RetrievalOrchestratorAgent:
         db_name: str,
         collection_name: str,
         student_profile: Optional[dict] = None,  # user can pass dict or None
+        subject_agent_id: Optional[str] = None,  # for shared knowledge
         top_k: int = 10
     ) -> str:
 
@@ -105,15 +106,16 @@ class RetrievalOrchestratorAgent:
         # logger.info(f"Full Query ({len(query)} chars):")
 
         try:
-            result = retrieve_chunk_for_query_send_to_llm(
+            result = retrieve_chunk_for_query_send_to_llm_enhanced(
                 query=query,
                 db_name=db_name,
                 collection_name=collection_name,
+                subject_agent_id=subject_agent_id,
                 embedding_model=self.embedding_model,
                 student_profile=profile.dict(),  # send as dict to similarity_search/groq
                 top_k=top_k
             )
-            return result  # {"response": str, "quality_scores": dict}
+            return result  # {"response": str, "quality_scores": dict, "sources": list}
         except Exception as e:
             logger.error(f"❌ Error during retrieval: {e}")
             raise

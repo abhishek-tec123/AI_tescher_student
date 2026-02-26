@@ -40,6 +40,7 @@ class StudentAgent:
         class_name: str,
         subject: str,
         student_profile: Optional[Dict] = None,
+        subject_agent_id: Optional[str] = None,  # for shared knowledge
         top_k: int = 10,
     ):
         """
@@ -62,5 +63,6 @@ class StudentAgent:
             db_name=class_name,
             collection_name=subject,
             student_profile=student_profile,
+            subject_agent_id=subject_agent_id,  # Pass for shared knowledge
             top_k=top_k
         )
