@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request, Depends, HTTPException
+from fastapi import APIRouter, Request, Depends, HTTPException, Query
 from studentProfileDetails.agents.queryHandler import queryRouter
 from studentProfileDetails.db_utils import StudentManager
 from studentProfileDetails.auth.dependencies import get_current_user, require_role
@@ -28,6 +28,29 @@ class ChatHistoryItem(BaseModel):
     query: str
     response: str
     evaluation: Optional[Dict] = {}
+
+class RecentActivityItem(BaseModel):
+    conversation_id: str
+    subject: str
+    agent_id: str
+    query: str
+    response_preview: str
+    timestamp: str
+    time_ago: str
+    feedback: str
+    confusion_type: str
+
+class UniqueAgentInfo(BaseModel):
+    subject: str
+    agent_id: str
+    conversation_count: int
+
+class RecentActivityResponse(BaseModel):
+    student_id: str
+    recent_activity: List[RecentActivityItem]
+    total_count: int
+    agents_used_count: int
+    unique_agents: List[UniqueAgentInfo]
 router = APIRouter()
 
 context_store: dict[str, list[dict[str, str]]] = {}
@@ -199,4 +222,42 @@ def submit_feedback(
         conversation_id=payload.conversation_id,
         feedback=payload.feedback,
         student_manager=student_manager
+    )
+
+@router.get("/{student_id}/recent-activity", response_model=RecentActivityResponse)
+def get_student_recent_activity(
+    student_id: str,
+    limit: int = Query(6, ge=1, le=100, description="Maximum number of agents to show"),
+    hours_back: Optional[int] = Query(None, ge=1, le=8760, description="Only show activities from last N hours"),
+    student_manager: StudentManager = Depends(),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get student's most recent conversation from each agent/subject.
+    
+    Args:
+        student_id: Student identifier
+        limit: Maximum number of agents to show (1-100)
+        hours_back: Optional filter to show only recent activities within last N hours
+    
+    Returns:
+        Most recent conversation per agent with agent info and timestamps
+    """
+    # Students can only access their own activity
+    if current_user["role"] == "student" and current_user["user_id"] != student_id:
+        raise HTTPException(status_code=403, detail="Access denied: You can only access your own activity")
+    
+    # Get recent activity data
+    activity_data = student_manager.get_student_recent_activity(
+        student_id=student_id,
+        limit=limit,
+        hours_back=hours_back
+    )
+    
+    return RecentActivityResponse(
+        student_id=student_id,
+        recent_activity=activity_data["recent_activity"],
+        total_count=activity_data["total_count"],
+        agents_used_count=activity_data["agents_used_count"],
+        unique_agents=activity_data["unique_agents"]
     )

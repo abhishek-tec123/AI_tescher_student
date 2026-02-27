@@ -792,6 +792,130 @@ class StudentManager:
         return formatted_history
 
     # ---------------------------
+    # Get Student Recent Activity (All Subjects)
+    # ---------------------------
+    def get_student_recent_activity(
+        self,
+        student_id: str,
+        limit: int = 1,
+        hours_back: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Get student's recent chat activity across all subjects/agents.
+        
+        Args:
+            student_id: Student identifier
+            limit: Maximum number of activities to return
+            hours_back: Optional filter for activities within last N hours
+            
+        Returns:
+            Dict with recent activity list and total count
+        """
+        from datetime import datetime, timedelta
+        
+        # Fetch student document with all conversation history
+        doc = self.students.find_one(
+            {"student_id": student_id},
+            {"conversation_history": 1}
+        )
+        
+        if not doc:
+            return {"recent_activity": [], "total_count": 0}
+        
+        all_conversations = []
+        conversation_history = doc.get("conversation_history", {})
+        
+        # Iterate through all subjects
+        for subject, history in conversation_history.items():
+            for convo in history:
+                # Apply time filter if specified
+                if hours_back and convo.get("timestamp"):
+                    cutoff_time = datetime.utcnow() - timedelta(hours=hours_back)
+                    if convo["timestamp"] < cutoff_time:
+                        continue
+                
+                # Create response preview (first 100 characters)
+                response_text = convo.get("response", "")
+                response_preview = response_text[:100] + "..." if len(response_text) > 100 else response_text
+                
+                # Calculate time ago
+                time_ago = ""
+                if convo.get("timestamp"):
+                    now = datetime.utcnow()
+                    convo_time = convo["timestamp"]
+                    time_diff = now - convo_time
+                    
+                    if time_diff.total_seconds() < 60:
+                        time_ago = f"{int(time_diff.total_seconds())} seconds ago"
+                    elif time_diff.total_seconds() < 3600:
+                        time_ago = f"{int(time_diff.total_seconds() / 60)} mins ago"
+                    elif time_diff.total_seconds() < 86400:
+                        time_ago = f"{int(time_diff.total_seconds() / 3600)} hours ago"
+                    else:
+                        time_ago = f"{int(time_diff.total_seconds() / 86400)} days ago"
+                
+                all_conversations.append({
+                    "conversation_id": str(convo.get("_id", "")),
+                    "subject": subject,
+                    "agent_id": convo.get("subject_agent_id", ""),
+                    "query": convo.get("query", ""),
+                    "response_preview": response_preview,
+                    "timestamp": convo["timestamp"].isoformat() if convo.get("timestamp") else None,
+                    "time_ago": time_ago,
+                    "feedback": convo.get("feedback", "neutral"),
+                    "confusion_type": convo.get("confusion_type", "NO_CONFUSION")
+                })
+        
+        # Sort by timestamp (most recent first)
+        all_conversations.sort(
+            key=lambda x: x.get("timestamp", ""), 
+            reverse=True
+        )
+        
+        # Get only the most recent conversation per agent
+        latest_per_agent = {}
+        for convo in all_conversations:
+            agent_key = convo.get("subject", "")
+            if agent_key not in latest_per_agent:
+                latest_per_agent[agent_key] = convo
+        
+        # Convert to list and sort by timestamp (most recent first)
+        recent_activity_per_agent = sorted(
+            latest_per_agent.values(),
+            key=lambda x: x.get("timestamp", ""),
+            reverse=True
+        )
+        
+        # Apply limit to the number of agents shown
+        limited_conversations = recent_activity_per_agent[:limit]
+        
+        # Calculate unique agents and their conversation counts
+        unique_agents = {}
+        for convo in all_conversations:
+            subject = convo.get("subject", "")
+            if subject not in unique_agents:
+                unique_agents[subject] = {
+                    "subject": subject,
+                    "agent_id": convo.get("agent_id", ""),
+                    "conversation_count": 0
+                }
+            unique_agents[subject]["conversation_count"] += 1
+        
+        # Convert to list and sort by conversation count (most used first)
+        unique_agents_list = sorted(
+            unique_agents.values(),
+            key=lambda x: x["conversation_count"],
+            reverse=True
+        )
+        
+        return {
+            "recent_activity": limited_conversations,
+            "total_count": len(recent_activity_per_agent),
+            "agents_used_count": len(unique_agents_list),
+            "unique_agents": unique_agents_list
+        }
+
+    # ---------------------------
     # Close connection
     # ---------------------------
     def close(self):
