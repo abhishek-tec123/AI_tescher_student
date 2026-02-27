@@ -269,6 +269,8 @@ async def retrieve_chunks_with_shared_knowledge_async(
     # Process results
     all_results = []
     sources_info = []
+    raw_agent_results = []
+    raw_shared_results = []
     
     for result in search_results:
         if isinstance(result, Exception):
@@ -282,7 +284,7 @@ async def retrieve_chunks_with_shared_knowledge_async(
         if len(result) == 2 and isinstance(result[0], list) and isinstance(result[1], (str, type(None))):
             agent_results, source_name = result
             if agent_results:
-                all_results.extend(agent_results)
+                raw_agent_results.extend(agent_results)
                 if source_name:
                     sources_info.append({
                         "type": "agent",
@@ -295,39 +297,78 @@ async def retrieve_chunks_with_shared_knowledge_async(
         elif len(result) == 2 and isinstance(result[0], list) and isinstance(result[1], list):
             shared_results, shared_sources = result
             if shared_results:
-                all_results.extend(shared_results)
+                raw_shared_results.extend(shared_results)
                 sources_info.extend(shared_sources)
                 logger.info(f"Retrieved {len(shared_results)} chunks from shared documents")
     
-    # Sort by score and limit results
-    all_results.sort(key=lambda x: x.get('score', 0), reverse=True)
+    logger.info(f"Total raw agent chunks: {len(raw_agent_results)}")
+    logger.info(f"Total raw shared chunks: {len(raw_shared_results)}")
     
-    # Separate agent and shared results
-    agent_results = [doc for doc in all_results if doc.get('source_type') == 'agent']
-    shared_results = [doc for doc in all_results if doc.get('source_type') == 'shared']
+    # Sort by score within each source
+    raw_agent_results.sort(key=lambda x: x.get('score', 0), reverse=True)
+    raw_shared_results.sort(key=lambda x: x.get('score', 0), reverse=True)
     
-    # Apply threshold filtering only to agent results
+    # Apply high threshold filtering (>0.5) to both agent and shared results
+    HIGH_THRESHOLD = 0.3  # Strict threshold for all content
     filtered_agent_results = [
-        doc for doc in agent_results
-        if doc.get("score", 0) >= MIN_SCORE_THRESHOLD
+        doc for doc in raw_agent_results
+        if doc.get("score", 0) >= HIGH_THRESHOLD
     ]
     
-    # Combine results: shared documents (no threshold) + filtered agent results
-    final_results = shared_results + filtered_agent_results
+    filtered_shared_results = [
+        doc for doc in raw_shared_results
+        if doc.get("score", 0) >= HIGH_THRESHOLD
+    ]
+    
+    logger.info(f"✅ Agent chunks passing threshold {HIGH_THRESHOLD}: {len(filtered_agent_results)}")
+    logger.info(f"✅ Shared chunks passing threshold {HIGH_THRESHOLD}: {len(filtered_shared_results)}")
+    
+    # If neither agent nor shared chunks pass the threshold, do NOT call the LLM
+    if not filtered_agent_results and not filtered_shared_results:
+        logger.warning("No relevant chunks from agent or shared documents met threshold requirements. Not calling LLM.")
+        safe_msg = (
+            "I’m not able to answer this question from the available learning materials. "
+            "Please try rephrasing your question or ask your teacher for help."
+        )
+        quality_scores = compute_quality_scores(
+            query=query,
+            response_text=safe_msg,
+            retrieved_chunks=[],
+            context_string="",
+        )
+        result = {
+            "response": safe_msg,
+            "quality_scores": quality_scores,
+            "sources": [],
+            "source_summary": [],
+            "chunks_used": 0,
+            "from_cache": False
+        }
+        _cache_vector_results(cache_key, result)
+        return result
+    
+    # Agent-first combination: agent chunks are primary, shared chunks supplement
+    final_results = filtered_agent_results + filtered_shared_results
     
     # Sort final results by score and limit
     final_results.sort(key=lambda x: x.get('score', 0), reverse=True)
     all_results = final_results[:top_k]
     
-    logger.info(f"✅ Using {len([d for d in all_results if d.get('source_type') == 'shared'])} shared documents (no threshold)")
-    logger.info(f"✅ Using {len([d for d in all_results if d.get('source_type') == 'agent'])} agent documents (threshold: {MIN_SCORE_THRESHOLD})")
+    logger.info(f"Using {len(all_results)} total chunks for LLM (agent first).")
     
-    # Generate response using the chunks
-    if not all_results:
-        logger.warning("No relevant chunks found from any source")
-        result = {"response": "I couldn't find relevant information to answer your question.", "quality_scores": {}, "sources": []}
-        _cache_vector_results(cache_key, result)
-        return result
+    # Log all selected chunks with detailed information for debugging
+    logger.info("=" * 80)
+    logger.info("🔍 SELECTED CHUNKS FOR LLM (AFTER THRESHOLD FILTERING):")
+    logger.info("=" * 80)
+    for i, chunk in enumerate(all_results):
+        chunk_content = chunk.get('text', chunk.get('chunk_text', ''))
+        chunk_preview = chunk_content[:200] + ("..." if len(chunk_content) > 200 else "")
+        logger.info(f"SELECTED CHUNK {i+1}:")
+        logger.info(f"  Score: {chunk.get('score', 0):.4f}")
+        logger.info(f"  Source: {chunk.get('source_type', 'unknown')}")
+        logger.info(f"  Content Preview: {chunk_preview}")
+        logger.info(f"  Full Content Length: {len(chunk_content)} chars")
+        logger.info("-" * 60)
     
     # Build context from chunks
     context_chunks = []
@@ -342,8 +383,14 @@ async def retrieve_chunks_with_shared_knowledge_async(
     logger.info(f"📤 Sending {len(context_chunks)} chunks to LLM, total chars: {len(result_string)}")
     if context_chunks:
         logger.info(f"📝 First chunk preview: {context_chunks[0][:200]}...")
+    logger.info(f"📤 SENDING TO LLM:")
+    logger.info("=" * 80)
     
     # Generate response
+    logger.info(f"📤 CALLING LLM WITH:")
+    logger.info(f"Query: {query[:200]}...")
+    logger.info(f"Context Length: {len(result_string)} chars")
+    logger.info("=" * 80)
     response_result = get_llm_response_from_chunk(
         result_string=result_string,
         query=query,
@@ -351,12 +398,21 @@ async def retrieve_chunks_with_shared_knowledge_async(
         logger=logger
     )
     
+    logger.info("=" * 80)
+    logger.info("📝 LLM RESPONSE RECEIVED:")
+    logger.info("=" * 80)
+    
     if isinstance(response_result, dict):
         response_text = response_result.get("response", "")
         quality_scores = response_result.get("quality_scores", {})
     else:
         response_text = str(response_result)
         quality_scores = {}
+    
+    # Log LLM response details for debugging
+    logger.info(f"Response Length: {len(response_text)} chars")
+    logger.info(f"Response Preview: {response_text[:300]}...")
+    logger.info(f"Quality Scores: {quality_scores}")
     
     # Compute quality scores if not provided
     if not quality_scores:
@@ -542,24 +598,56 @@ def _fallback_sync_search(
     agent_results = [doc for doc in all_results if doc.get('source_type') == 'agent']
     shared_results = [doc for doc in all_results if doc.get('source_type') == 'shared']
     
-    # Apply threshold filtering only to agent results
+    logger.info(f"Total raw agent chunks (sync): {len(agent_results)}")
+    logger.info(f"Total raw shared chunks (sync): {len(shared_results)}")
+    
+    # Apply high threshold filtering (>0.5) to both agent and shared results
+    HIGH_THRESHOLD = 0.2  # Strict threshold for all content
     filtered_agent_results = [
         doc for doc in agent_results
-        if doc.get("score", 0) >= MIN_SCORE_THRESHOLD
+        if doc.get("score", 0) >= HIGH_THRESHOLD
     ]
     
-    # Combine results: shared documents (no threshold) + filtered agent results
-    final_results = shared_results + filtered_agent_results
+    filtered_shared_results = [
+        doc for doc in shared_results
+        if doc.get("score", 0) >= HIGH_THRESHOLD
+    ]
+    
+    logger.info(f"✅ Agent chunks passing threshold {HIGH_THRESHOLD} (sync): {len(filtered_agent_results)}")
+    logger.info(f"✅ Shared chunks passing threshold {HIGH_THRESHOLD} (sync): {len(filtered_shared_results)}")
+    
+    # If neither agent nor shared chunks pass the threshold, do NOT call the LLM
+    if not filtered_agent_results and not filtered_shared_results:
+        logger.warning("No relevant chunks from agent or shared documents met threshold requirements (sync). Not calling LLM.")
+        safe_msg = (
+            "I’m not able to answer this question from the available learning materials. "
+            "Please try rephrasing your question or ask your teacher for help."
+        )
+        quality_scores = compute_quality_scores(
+            query=query,
+            response_text=safe_msg,
+            retrieved_chunks=[],
+            context_string="",
+        )
+        result = {
+            "response": safe_msg,
+            "quality_scores": quality_scores,
+            "sources": [],
+            "source_summary": [],
+            "chunks_used": 0,
+            "from_cache": False
+        }
+        _cache_vector_results(cache_key, result)
+        return result
+    
+    # Agent-first combination: agent chunks are primary, shared chunks supplement
+    final_results = filtered_agent_results + filtered_shared_results
     
     # Sort final results by score and limit
     final_results.sort(key=lambda x: x.get('score', 0), reverse=True)
     all_results = final_results[:top_k]
     
-    logger.info(f"✅ Using {len([d for d in all_results if d.get('source_type') == 'shared'])} shared documents (no threshold)")
-    logger.info(f"✅ Using {len([d for d in all_results if d.get('source_type') == 'agent'])} agent documents (threshold: {MIN_SCORE_THRESHOLD})")
-    
-    if not all_results:
-        return {"response": "I couldn't find relevant information to answer your question.", "quality_scores": {}, "sources": []}
+    logger.info(f"Using {len(all_results)} total chunks for LLM (sync, agent first).")
     
     # Generate response
     context_chunks = []

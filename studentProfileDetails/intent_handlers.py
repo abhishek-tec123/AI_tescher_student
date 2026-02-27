@@ -70,40 +70,75 @@ def handle_chat_intent(
     rl_metadata = chat.get("rl_metadata", {})
 
     # -----------------------------------------
-    # Return immediate response to user
+    # Synchronous processing for conversation ID and evaluation
+    # -----------------------------------------
+    
+    # Update progression BEFORE academic response
+    updated_profile = update_progress_and_regression(
+        student_manager,
+        payload.student_id,
+        payload.subject,
+        profile,
+    )
+    print("📊 Profile update completed")
+    
+    # Evaluate academic response
+    evaluation = evaluate_response(
+        query=payload.query,
+        response=response,
+        subject=payload.subject,
+        profile=updated_profile,
+        confusion_type=confusion_type,
+    )
+    print("🧠 Evaluation completed")
+
+    # Store conversation synchronously to get conversation_id
+    agent_id = get_dynamic_agent_id_for_subject(student_manager, payload.student_id, payload.subject)
+    if agent_id:
+        conversation_id = student_manager.add_conversation(
+            student_id=payload.student_id,
+            subject=payload.subject,
+            query=payload.query,
+            response=response,
+            confusion_type=confusion_type,
+            evaluation=evaluation,
+            quality_scores=evaluation,  # ✅ Add quality_scores for performance tracking
+            feedback=evaluation.get("feedback", "like") if isinstance(evaluation, dict) else "like",  # ✅ Add feedback
+            additional_data={
+                "rl_metadata": rl_metadata,
+                "subject_agent_id": agent_id  # ✅ Use dynamic agent ID mapping
+            }
+        )
+    else:
+        conversation_id = student_manager.add_conversation(
+            student_id=payload.student_id,
+            subject=payload.subject,
+            query=payload.query,
+            response=response,
+            confusion_type=confusion_type,
+            evaluation=evaluation,
+            additional_data={"rl_metadata": rl_metadata}
+        )
+        print(f"⚠️ Agent not found for subject '{payload.subject}'. Performance tracking skipped.")
+    
+    print(f"� Conversation storage completed: {conversation_id}")
+
+    # -----------------------------------------
+    # Return immediate response with actual values
     # -----------------------------------------
     immediate_result = {
         "response": response,
-        "profile": profile,  # Return current profile, will be updated in background
-        "evaluation": None,  # Will be populated in background
-        "conversation_id": None,  # Will be populated in background
+        "profile": updated_profile,  # Return updated profile
+        "evaluation": evaluation,  # ✅ Return actual evaluation
+        "conversation_id": str(conversation_id),  # ✅ Return actual conversation ID
     }
 
     # -----------------------------------------
-    # Background processing for all database operations
+    # Background processing for non-critical operations only
     # -----------------------------------------
     def background_processing():
         try:
-            # Update progression BEFORE academic response
-            updated_profile = update_progress_and_regression(
-                student_manager,
-                payload.student_id,
-                payload.subject,
-                profile,
-            )
-            print("📊 Background profile update completed")
-            
-            # Evaluate academic response
-            evaluation = evaluate_response(
-                query=payload.query,
-                response=response,
-                subject=payload.subject,
-                profile=updated_profile,
-                confusion_type=confusion_type,
-            )
-            print("🧠 Background evaluation completed")
-
-            # Persist profile
+            # Persist profile (non-critical for immediate response)
             student_manager.update_subject_preference(
                 payload.student_id,
                 payload.subject,
@@ -119,38 +154,7 @@ def handle_chat_intent(
             )
             print("💾 Background profile persistence completed")
             
-            # Store conversation
-            agent_id = get_dynamic_agent_id_for_subject(student_manager, payload.student_id, payload.subject)
-            if agent_id:
-                conversation_id = student_manager.add_conversation(
-                    student_id=payload.student_id,
-                    subject=payload.subject,
-                    query=payload.query,
-                    response=response,
-                    confusion_type=confusion_type,
-                    evaluation=evaluation,
-                    quality_scores=evaluation,  # ✅ Add quality_scores for performance tracking
-                    feedback=evaluation.get("feedback", "like") if isinstance(evaluation, dict) else "like",  # ✅ Add feedback
-                    additional_data={
-                        "rl_metadata": rl_metadata,
-                        "subject_agent_id": agent_id  # ✅ Use dynamic agent ID mapping
-                    }
-                )
-            else:
-                conversation_id = student_manager.add_conversation(
-                    student_id=payload.student_id,
-                    subject=payload.subject,
-                    query=payload.query,
-                    response=response,
-                    confusion_type=confusion_type,
-                    evaluation=evaluation,
-                    additional_data={"rl_metadata": rl_metadata}
-                )
-                print(f"⚠️ Agent not found for subject '{payload.subject}'. Performance tracking skipped.")
-            
-            print(f"🔄 Background conversation storage completed: {conversation_id}")
-            
-            # Second progression update
+            # Second progression update (non-critical)
             final_profile = update_progress_and_regression(
                 student_manager,
                 payload.student_id,
@@ -159,21 +163,15 @@ def handle_chat_intent(
             )
             print("📈 Background final progression update completed")
             
-            # Reload normalized profile
-            normalized_profile = normalize_student_preference(
-                student_manager.get_or_create_subject_preference(
-                    payload.student_id, payload.subject
-                )
-            )
             print("✅ All background processing completed successfully")
             
         except Exception as e:
             print(f"❌ Background processing failed: {e}")
     
-    # Start background processing for faster response
+    # Start background processing for non-critical operations
     background_thread = threading.Thread(target=background_processing, daemon=True)
     background_thread.start()
-    print(f"🚀 All database operations moved to background for faster response")
+    print(f"🚀 Non-critical operations moved to background")
     
     return immediate_result
 
