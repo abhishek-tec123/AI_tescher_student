@@ -8,6 +8,7 @@ from studentProfileDetails.agents.mainAgent import diagnosis_chat
 from studentProfileDetails.agents.quiz_generator import generate_quiz_from_history
 from studentProfileDetails.agents.studyPlane import generate_study_plan_with_subtopics
 from studentProfileDetails.agents.evaluation_agent import evaluate_response
+from studentProfileDetails.agents.vector_performance_updater import update_vector_performance
 from studentProfileDetails.utils.agent_utils import get_dynamic_agent_id_for_subject  # ✅ Import dynamic agent ID mapping
 from studentProfileDetails.handle_general_cht import is_greeting, handle_greeting_chat, handle_general_chat_llm, is_general_chat
 # -------------------------------------------------
@@ -70,7 +71,7 @@ def handle_chat_intent(
     rl_metadata = chat.get("rl_metadata", {})
 
     # -----------------------------------------
-    # Synchronous processing for conversation ID and evaluation
+    # Synchronous processing for conversation ID 
     # -----------------------------------------
     
     # Update progression BEFORE academic response
@@ -82,16 +83,6 @@ def handle_chat_intent(
     )
     print("📊 Profile update completed")
     
-    # Evaluate academic response
-    evaluation = evaluate_response(
-        query=payload.query,
-        response=response,
-        subject=payload.subject,
-        profile=updated_profile,
-        confusion_type=confusion_type,
-    )
-    print("🧠 Evaluation completed")
-
     # Store conversation synchronously to get conversation_id
     agent_id = get_dynamic_agent_id_for_subject(student_manager, payload.student_id, payload.subject)
     if agent_id:
@@ -101,12 +92,9 @@ def handle_chat_intent(
             query=payload.query,
             response=response,
             confusion_type=confusion_type,
-            evaluation=evaluation,
-            quality_scores=evaluation,  # ✅ Add quality_scores for performance tracking
-            feedback=evaluation.get("feedback", "like") if isinstance(evaluation, dict) else "like",  # ✅ Add feedback
             additional_data={
                 "rl_metadata": rl_metadata,
-                "subject_agent_id": agent_id  # ✅ Use dynamic agent ID mapping
+                "subject_agent_id": agent_id  # Use dynamic agent ID mapping
             }
         )
     else:
@@ -116,7 +104,6 @@ def handle_chat_intent(
             query=payload.query,
             response=response,
             confusion_type=confusion_type,
-            evaluation=evaluation,
             additional_data={"rl_metadata": rl_metadata}
         )
         print(f"⚠️ Agent not found for subject '{payload.subject}'. Performance tracking skipped.")
@@ -129,8 +116,8 @@ def handle_chat_intent(
     immediate_result = {
         "response": response,
         "profile": updated_profile,  # Return updated profile
-        "evaluation": evaluation,  # ✅ Return actual evaluation
-        "conversation_id": str(conversation_id),  # ✅ Return actual conversation ID
+        "evaluation": {"status": "processing"},  # Placeholder evaluation
+        "conversation_id": str(conversation_id),  # Return actual conversation ID
     }
 
     # -----------------------------------------
@@ -138,6 +125,31 @@ def handle_chat_intent(
     # -----------------------------------------
     def background_processing():
         try:
+            # Evaluate academic response (moved to background)
+            evaluation = evaluate_response(
+                query=payload.query,
+                response=response,
+                subject=payload.subject,
+                profile=updated_profile,
+            )
+            print("🧠 Evaluation completed")
+            
+            # Performance tracking (moved to background)
+            if agent_id:
+                performance_update_result = update_vector_performance(
+                    subject_agent_id=agent_id,
+                    quality_scores=evaluation,
+                    feedback=evaluation.get("feedback", "like") if isinstance(evaluation, dict) else "like",
+                    confusion_type=confusion_type,
+                    student_id=payload.student_id
+                )
+                print(f"🔥 PERFORMANCE UPDATE TRIGGERED")
+                print(f"   - Agent ID: {agent_id}")
+                print(f"   - Quality Scores: {evaluation}")
+                print(f"   - Student ID: {payload.student_id}")
+            else:
+                print(f"⚠️ Agent not found for subject '{payload.subject}'. Performance tracking skipped.")
+            
             # Persist profile (non-critical for immediate response)
             student_manager.update_subject_preference(
                 payload.student_id,
