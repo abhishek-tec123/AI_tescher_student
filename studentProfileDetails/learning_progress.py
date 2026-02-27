@@ -88,34 +88,31 @@ def update_progress_and_regression(student_manager, student_id, subject, profile
             level = "basic"
 
     # ------------------
-    # RESPONSE_LENGTH (updated logic: quiz performance has absolute priority over confusion)
+    # RESPONSE_LENGTH (updated logic: maintain longer, detailed responses)
     # ------------------
-    response_length = profile.get("response_length", "long")
+    response_length = profile.get("response_length", "very long")  # Default to very long for detailed responses
     degradation_include_example = False
 
-    # PERFECT PERFORMANCE: Decrease response length (ABSOLUTE PRIORITY - overrides confusion)
+    # PERFECT PERFORMANCE: Keep responses long (override short reduction)
     if consecutive_perfect_scores >= 2:
-        if response_length == "very long":
-            response_length = "long"
-        elif response_length == "long":
-            response_length = "short"
-        print(f"📈 Perfect performance: response_length reduced to {response_length}")
-    # POOR PERFORMANCE: Increase response length (ABSOLUTE PRIORITY - overrides confusion)
-    elif consecutive_low_scores >= 2:
         if response_length == "short":
-            response_length = "long"
+            response_length = "long"  # Upgrade from short to long
         elif response_length == "long":
-            response_length = "very long"
-        print(f"📉 Poor performance: response_length increased to {response_length}")
+            response_length = "very long"  # Upgrade from long to very long
+        print(f"📈 Perfect performance: maintaining detailed responses ({response_length})")
+    # POOR PERFORMANCE: Keep very long for struggling students
+    elif consecutive_low_scores >= 2:
+        response_length = "very long"  # Ensure maximum detail for struggling students
+        print(f"📉 Poor performance: response_length set to {response_length} for better support")
         degradation_include_example = True
-    # REGULAR STREAK-BASED LOGIC (only if no quiz performance)
+    # REGULAR STREAK-BASED LOGIC (maintain longer responses)
     elif correct_streak >= 3 and not degradation_triggered:
-        if response_length == "very long":
-            response_length = "long"
+        if response_length == "short":
+            response_length = "long"  # Upgrade from short to long
         elif response_length == "long":
-            response_length = "short"
-        print(f"📈 Good performance: response_length reduced to {response_length}")
-    # CONFUSION-BASED DEGRADATION (only if no quiz performance)
+            response_length = "very long"  # Upgrade from long to very long
+        print(f"📈 Good performance: maintaining detailed responses ({response_length})")
+    # CONFUSION-BASED DEGRADATION (keep responses long for clarity)
     elif degradation_triggered or wrong_streak >= 3:
         if response_length == "short":
             response_length = "long"

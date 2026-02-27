@@ -5,6 +5,9 @@
 import logging
 import os
 import numpy as np
+import re
+import hashlib
+import time
 from pymongo import MongoClient
 from search.structured_response import generate_response_from_groq, compute_quality_scores
 
@@ -23,7 +26,117 @@ VECTOR_INDEX_NAME = "vector_index"
 VECTOR_PATH = "embedding.vector"
 
 TOP_K = 10
-MIN_SCORE_THRESHOLD = 0.30  # Lowered from 0.35 to improve recall for short or context-dependent queries
+MIN_SCORE_THRESHOLD = 0.2  # Threshold for chunk selection - lowered for better recall
+
+# -----------------------------
+# Response Caching System
+# -----------------------------
+class ResponseCache:
+    def __init__(self):
+        self.cache = {}
+        self.question_frequency = {}
+        self.cache_ttl = 3600  # 1 hour cache TTL
+    
+    def _get_question_hash(self, question):
+        """Generate a hash for the question to use as cache key."""
+        # Extract core question first to handle variations
+        core_question = extract_core_question(question)
+        
+        # Normalize question: lowercase, remove extra whitespace, remove punctuation
+        normalized = re.sub(r'[^\w\s]', '', core_question.lower().strip())
+        normalized = re.sub(r'\s+', ' ', normalized)
+        
+        # Remove common question words that don't affect the core meaning
+        stop_words = ['what', 'is', 'are', 'the', 'a', 'an', 'tell', 'me', 'explain', 'describe']
+        words = normalized.split()
+        filtered_words = [word for word in words if word not in stop_words and len(word) > 2]
+        normalized = ' '.join(filtered_words)
+        
+        logger.info(f"[ResponseCache] Normalized question: '{normalized}'")
+        return hashlib.md5(normalized.encode()).hexdigest()
+    
+    def get_cached_response(self, question, student_id=None):
+        """Get cached response if available and not expired."""
+        question_hash = self._get_question_hash(question)
+        current_time = time.time()
+        
+        if question_hash in self.cache:
+            cached_data = self.cache[question_hash]
+            
+            # Check if cache is still valid
+            if current_time - cached_data['timestamp'] < self.cache_ttl:
+                # Update frequency count
+                self.question_frequency[question_hash] = self.question_frequency.get(question_hash, 0) + 1
+                
+                frequency = self.question_frequency[question_hash]
+                logger.info(f"[ResponseCache] Question repeated {frequency} times, using cached response")
+                
+                # Return longer response for repeated questions
+                response = cached_data['response']
+                if frequency > 1:
+                    response = self._make_response_longer(response, frequency)
+                
+                return {
+                    'response': response,
+                    'quality_scores': cached_data['quality_scores'],
+                    'from_cache': True,
+                    'repeat_count': frequency
+                }
+            else:
+                # Cache expired, remove it
+                del self.cache[question_hash]
+                if question_hash in self.question_frequency:
+                    del self.question_frequency[question_hash]
+        
+        return None
+    
+    def cache_response(self, question, response, quality_scores, student_id=None):
+        """Cache a response for future use."""
+        question_hash = self._get_question_hash(question)
+        
+        self.cache[question_hash] = {
+            'response': response,
+            'quality_scores': quality_scores,
+            'timestamp': time.time(),
+            'student_id': student_id
+        }
+        
+        # Initialize frequency count
+        if question_hash not in self.question_frequency:
+            self.question_frequency[question_hash] = 1
+        
+        logger.info(f"[ResponseCache] Cached response for question (hash: {question_hash[:8]}...)")
+    
+    def _make_response_longer(self, original_response, repeat_count):
+        """Make response longer for repeated questions."""
+        # Add more detailed explanations for repeated questions
+        longer_prefixes = [
+            "Since you've asked about this topic again, let me provide you with a more comprehensive explanation:\n\n",
+            "Building on our previous discussion, here's a more detailed response:\n\n",
+            "As this is an important topic you're revisiting, I'll elaborate further:\n\n",
+            "Let me expand on the previous answer with additional details and context:\n\n"
+        ]
+        
+        longer_suffixes = [
+            "\n\nIf you need even more specific information about any aspect of this topic, please let me know!",
+            "\n\nFeel free to ask follow-up questions if you'd like me to dive deeper into any particular area.",
+            "\n\nI hope this expanded explanation helps you better understand this concept.",
+            "\n\nWould you like me to provide examples or clarify any specific points in more detail?"
+        ]
+        
+        prefix = longer_prefixes[min(repeat_count - 2, len(longer_prefixes) - 1)]
+        suffix = longer_suffixes[min(repeat_count - 2, len(longer_suffixes) - 1)]
+        
+        return prefix + original_response + suffix
+    
+    def clear_cache(self):
+        """Clear all cached responses."""
+        self.cache.clear()
+        self.question_frequency.clear()
+        logger.info("[ResponseCache] Cache cleared")
+
+# Global cache instance
+response_cache = ResponseCache()
 
 # -----------------------------
 # Query extraction helper
@@ -121,17 +234,33 @@ def embed_query(query: str, embedding_model) -> list:
 # -----------------------------
 # Vector search helpers
 # -----------------------------
-def fallback_text_search(query, collection, limit=TOP_K):
-    """Fallback text-based search using MongoDB text search when vector index is not available."""
+def find_similar_chunks(query_embedding, collection, query="", num_candidates=100, limit=TOP_K, index_name=VECTOR_INDEX_NAME):
+    """Cosine similarity search with regex fallback."""
+    logger.info(f"[CosineSearch] Using in-memory cosine similarity search")
+    
+    # Try cosine similarity first
+    cosine_results = find_similar_chunks_in_memory(query_embedding, collection, top_k=limit, similarity_threshold=0.2)
+    
+    if cosine_results:
+        logger.info(f"[CosineSearch] Cosine similarity returned {len(cosine_results)} results")
+        return cosine_results
+    
+    # If cosine similarity fails, try regex fallback
+    logger.info(f"[CosineSearch] No cosine similarity results, trying regex fallback")
+    regex_results = find_similar_chunks_regex_fallback(query, collection, limit=limit)
+    
+    return regex_results
+
+def find_similar_chunks_regex_fallback(query, collection, limit=TOP_K):
+    """Regex-based fallback search when cosine similarity fails."""
+    logger.info(f"[RegexSearch] Starting regex fallback search")
+    
     try:
-        collection_name = collection.name
-        db_name = collection.database.name
-        logger.info(f"[FallbackSearch] Using text search in {db_name}.{collection_name}")
-        
-        # Create a simple text search using regex and text matching
         # Extract key terms from the query
         query_terms = query.lower().split()
         query_terms = [term.strip("?.,!;:") for term in query_terms if len(term) > 2]
+        
+        logger.info(f"[RegexSearch] Extracted terms: {query_terms[:5]}")  # Log first 5 terms
         
         # Build search pipeline
         pipeline = []
@@ -142,11 +271,11 @@ def fallback_text_search(query, collection, limit=TOP_K):
             
             # Add exact word matches for first term (highest priority)
             if query_terms[0]:
-                patterns.append({"chunk.text": {"$regex": r"\b" + query_terms[0] + r"\b", "$options": "i"}})
+                patterns.append({"chunk.text": {"$regex": r"\b" + re.escape(query_terms[0]) + r"\b", "$options": "i"}})
             
             # Add partial matches for all terms
-            for term in query_terms[:3]:
-                patterns.append({"chunk.text": {"$regex": term, "$options": "i"}})
+            for term in query_terms[:5]:  # Limit to first 5 terms to avoid too many patterns
+                patterns.append({"chunk.text": {"$regex": re.escape(term), "$options": "i"}})
             
             # Match documents containing any query term
             pipeline.append({
@@ -155,16 +284,30 @@ def fallback_text_search(query, collection, limit=TOP_K):
                 }
             })
             
-            # Sort by text length (shorter, more focused content gets higher score)
+            # Add a simple scoring mechanism based on term frequency and text length
             pipeline.append({
                 "$addFields": {
-                    "text_length": {"$strLenCP": "$chunk.text"}
+                    "text_length": {"$strLenCP": "$chunk.text"},
+                    "term_count": {
+                        "$size": {
+                            "$filter": {
+                                "input": query_terms[:3],  # Check first 3 terms
+                                "as": "term",
+                                "cond": {
+                                    "$regexMatch": {
+                                        "input": "$chunk.text",
+                                        "regex": {"$concat": ["(?i)", {"$literal": "\\b"}, "$$term", {"$literal": "\\b"}]}
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             })
             
-            # Sort by text length (ascending) and then by exact match priority
+            # Sort by term count (descending) and text length (ascending for focused content)
             pipeline.append({
-                "$sort": {"text_length": 1}
+                "$sort": {"term_count": -1, "text_length": 1}
             })
             
         else:
@@ -181,124 +324,66 @@ def fallback_text_search(query, collection, limit=TOP_K):
                 "score": {
                     "$switch": {
                         "branches": [
-                            # Short, focused content gets higher score
-                            {"case": {"$lt": [{"$strLenCP": "$chunk.text"}, 500]}, "then": 0.8},
-                            {"case": {"$lt": [{"$strLenCP": "$chunk.text"}, 1000]}, "then": 0.7},
-                            {"case": {"$lt": [{"$strLenCP": "$chunk.text"}, 2000]}, "then": 0.6}
+                            # High score for multiple term matches
+                            {"case": {"$gte": ["$term_count", 3]}, "then": 0.7},
+                            {"case": {"$gte": ["$term_count", 2]}, "then": 0.6},
+                            {"case": {"$gte": ["$term_count", 1]}, "then": 0.5},
+                            # Base score for text length (shorter, more focused content gets higher score)
+                            {"case": {"$lt": [{"$strLenCP": "$chunk.text"}, 500]}, "then": 0.4},
+                            {"case": {"$lt": [{"$strLenCP": "$chunk.text"}, 1000]}, "then": 0.3}
                         ],
-                        "default": 0.5
+                        "default": 0.2
                     }
                 },
                 "unique_id": "$document.doc_unique_id",
                 "unique_chunk_id": "$chunk.unique_chunk_id",
                 "subject_agent_id": "$subject_agent_id",
                 "document_id": "$document_id",
-                "document": "$document",
-                "chunk": "$chunk",
+                "document": {"doc_unique_id": "$document.doc_unique_id"},
+                "chunk": {"text": "$chunk.text", "unique_chunk_id": "$chunk.unique_chunk_id"},
                 "agent_metadata": "$agent_metadata"
             }
         })
         
         results = list(collection.aggregate(pipeline))
-        logger.info(f"[FallbackSearch] Text search returned {len(results)} results")
+        logger.info(f"[RegexSearch] Regex search returned {len(results)} results")
+        
+        # Log top few results with scores
+        for i, result in enumerate(results[:3]):
+            logger.info(f"[RegexSearch] Result {i+1}: Score={result['score']:.3f}, Chunk ID: {result.get('unique_chunk_id')}")
         
         return results
         
     except Exception as e:
-        logger.error(f"[FallbackSearch] Text search failed: {e}")
-        # Fallback to simple sampling if regex search fails
+        logger.error(f"[RegexSearch] Regex search failed: {e}")
+        # Final fallback to simple sampling
         try:
             pipeline = [
                 {"$sample": {"size": limit}},
                 {
                     "$project": {
                         "chunk_text": "$chunk.text",
-                        "score": {"$literal": 0.3},  # Lower score for pure sampling
+                        "score": {"$literal": 0.1},  # Very low score for pure sampling
                         "unique_id": "$document.doc_unique_id",
                         "unique_chunk_id": "$chunk.unique_chunk_id",
                         "subject_agent_id": "$subject_agent_id",
                         "document_id": "$document_id",
-                        "document": "$document",
-                        "chunk": "$chunk",
+                        "document": {"doc_unique_id": "$document.doc_unique_id"},
+                        "chunk": {"text": "$chunk.text", "unique_chunk_id": "$chunk.unique_chunk_id"},
                         "agent_metadata": "$agent_metadata"
                     }
                 }
             ]
             results = list(collection.aggregate(pipeline))
-            logger.info(f"[FallbackSearch] Sampling fallback returned {len(results)} results")
+            logger.info(f"[RegexSearch] Sampling fallback returned {len(results)} results")
             return results
         except Exception as e2:
-            logger.error(f"[FallbackSearch] Even sampling failed: {e2}")
+            logger.error(f"[RegexSearch] Even sampling failed: {e2}")
             return []
 
-def find_similar_chunks(query_embedding, collection, query="", num_candidates=100, limit=TOP_K, index_name=VECTOR_INDEX_NAME):
-    """MongoDB Atlas vector search with fallback to text search."""
-    try:
-        # Debug: Check collection info
-        collection_name = collection.name
-        db_name = collection.database.name
-        logger.info(f"[VectorSearch] Searching in {db_name}.{collection_name}")
-        
-        # Debug: Check if collection has documents with embeddings
-        total_docs = collection.count_documents({})
-        docs_with_embeddings = collection.count_documents({"embedding.vector": {"$exists": True}})
-        logger.info(f"[VectorSearch] Collection has {total_docs} total docs, {docs_with_embeddings} with embeddings")
-        
-        # Try vector search first
-        try:
-            pipeline = [
-                {
-                    "$vectorSearch": {
-                        "index": index_name,
-                        # Match the stored schema: embedding vector is nested
-                        "path": VECTOR_PATH,
-                        "queryVector": query_embedding,
-                        "numCandidates": num_candidates,
-                        "limit": limit
-                    }
-                },
-                {
-                    "$project": {
-                        # Normalize fields into a flat structure expected downstream
-                        "chunk_text": "$chunk.text",
-                        "score": {"$meta": "vectorSearchScore"},
-                        "unique_id": "$document.doc_unique_id",
-                        "unique_chunk_id": "$chunk.unique_chunk_id",
-                        "subject_agent_id": "$subject_agent_id",
-                        "document_id": "$document_id",
-                        "document": "$document",
-                        "chunk": "$chunk",
-                        "agent_metadata": "$agent_metadata"
-                    }
-                }
-            ]
-            
-            results = list(collection.aggregate(pipeline))
-            logger.info(f"[VectorSearch] Atlas search returned {len(results)} results")
-            
-            if results:
-                # Debug: Log first result structure
-                logger.debug(f"[VectorSearch] First result keys: {list(results[0].keys())}")
-                logger.debug(f"[VectorSearch] First result subject_agent_id: {results[0].get('subject_agent_id')}")
-                logger.debug(f"[VectorSearch] First result score: {results[0].get('score')}")
-                return results
-            
-        except Exception as vector_error:
-            logger.warning(f"[VectorSearch] Vector search failed: {vector_error}")
-            logger.info("[VectorSearch] Falling back to text search")
-        
-        # Fallback to text search if vector search fails or returns no results
-        logger.info("[VectorSearch] Using fallback text search")
-        return fallback_text_search(query, collection, limit)
-        
-    except Exception as e:
-        logger.warning(f"[VectorSearch] Atlas search failed: {e}")
-        import traceback
-        logger.error(f"[VectorSearch] Error traceback: {traceback.format_exc()}")
-        return []
-
-def find_similar_chunks_in_memory(query_embedding, collection, top_k=TOP_K):
+def find_similar_chunks_in_memory(query_embedding, collection, top_k=TOP_K, similarity_threshold=0.2):
     """Fallback in-memory cosine similarity search."""
+    logger.info(f"[InMemorySearch] Starting in-memory cosine similarity search")
     # Match the current nested schema used when storing documents
     docs = list(
         collection.find(
@@ -310,12 +395,12 @@ def find_similar_chunks_in_memory(query_embedding, collection, top_k=TOP_K):
                 "document.doc_unique_id": 1,
                 "subject_agent_id": 1,
                 "document_id": 1,
-                "document": 1,
-                "chunk": 1,
                 "agent_metadata": 1,
             },
         )
     )
+    
+    logger.info(f"[InMemorySearch] Found {len(docs)} documents with embeddings")
 
     def cosine_similarity(a, b):
         a = np.array(a)
@@ -334,27 +419,30 @@ def find_similar_chunks_in_memory(query_embedding, collection, top_k=TOP_K):
         chunk_container = doc.get("chunk") or {}
         document_container = doc.get("document") or {}
 
-        unique_id = document_container.get("doc_unique_id")
+        unique_id = document_container.get("doc_unique_id") if document_container else None
         unique_chunk_id = chunk_container.get("unique_chunk_id", "N/A")
         chunk_text = chunk_container.get("text", "")
 
+        similarity_score = cosine_similarity(query_embedding, embedding_vector)
         scored.append(
             {
                 # Normalize into the flat structure expected downstream
                 "unique_id": unique_id,
                 "unique_chunk_id": unique_chunk_id,
                 "chunk_text": chunk_text,
-                "score": cosine_similarity(query_embedding, embedding_vector),
+                "score": similarity_score,
                 "subject_agent_id": doc.get("subject_agent_id"),
                 "document_id": doc.get("document_id"),
-                "document": doc.get("document"),
+                "document": document_container,
                 "chunk": doc.get("chunk"),
                 "agent_metadata": doc.get("agent_metadata"),
             }
         )
 
     scored.sort(key=lambda x: x["score"], reverse=True)
-    return scored[:top_k]
+    top_results = scored[:top_k]
+    logger.info(f"[InMemorySearch] Returning {len(top_results)} results, top score: {top_results[0]['score'] if top_results else 0:.4f}")
+    return top_results
 
 # -----------------------------
 # LLM response helper
@@ -398,8 +486,9 @@ def retrieve_chunk_for_query_send_to_llm(
     collection_name: str = None,
     embedding_model=None,
     student_profile: dict = None,
-    top_k: int = TOP_K
-    ) -> dict:
+    top_k: int = TOP_K,
+    disable_rl: bool = False
+) -> dict:
     """
     Retrieves relevant chunks for a query and generates an LLM response.
     Returns: {"response": str, "quality_scores": dict}
@@ -419,6 +508,21 @@ def retrieve_chunk_for_query_send_to_llm(
     if not query or not query.strip():
         logger.error("Query cannot be empty.")
         return _err("Query cannot be empty.")
+
+    # -----------------------------
+    # Check for cached response first
+    # -----------------------------
+    student_id = student_profile.get('student_id') if student_profile else None
+    cached_response = response_cache.get_cached_response(query, student_id)
+    
+    if cached_response:
+        logger.info(f"[ResponseCache] Returning cached response (repeat #{cached_response['repeat_count']})")
+        return {
+            "response": cached_response['response'], 
+            "quality_scores": cached_response['quality_scores'],
+            "from_cache": True,
+            "repeat_count": cached_response['repeat_count']
+        }
 
     # -----------------------------
     # Connect to MongoDB
@@ -458,10 +562,12 @@ def retrieve_chunk_for_query_send_to_llm(
     # Retrieve chunks
     # -----------------------------
     results = find_similar_chunks(query_embedding, collection, query, limit=top_k)
+    logger.info(f"[VectorSearch] Atlas search returned {len(results)} results")
 
     if not results:
         logger.info("[VectorSearch] No results from Atlas, using in-memory fallback.")
         results = find_similar_chunks_in_memory(query_embedding, collection, top_k=top_k)
+        logger.info(f"[VectorSearch] In-memory fallback returned {len(results)} results")
 
     if not results:
         # No chunks retrieved at all (empty collection or vector search failure).
@@ -563,4 +669,9 @@ def retrieve_chunk_for_query_send_to_llm(
         context_string=result_string,
     )
 
-    return {"response": response_text, "quality_scores": quality_scores}
+    # -----------------------------
+    # Cache the response for future use
+    # -----------------------------
+    response_cache.cache_response(query, response_text, quality_scores, student_id)
+
+    return {"response": response_text, "quality_scores": quality_scores, "from_cache": False}

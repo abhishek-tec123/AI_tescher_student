@@ -1,43 +1,61 @@
 [project]
 name = "langchain-adk"
 version = "0.1.0"
-description = "Add your description here"
+description = "LangChain ADK Backend"
 readme = "README.md"
+requires-python = ">=3.11,<3.13"
 dependencies = [
     "bcrypt<4.1",
     "bs4>=0.0.2",
     "ddgs>=9.10.0",
     "docx>=0.2.4",
     "python-docx>=1.1.0",
-    "fastapi>=0.128.0",
+    "fastapi>=0.110.0,<0.129.0",
     "fitz>=0.0.1.dev2",
     "geopy>=2.4.1",
-    "langchain>=1.2.6",
-    "langchain-classic>=1.0.1",
-    "langchain-community>=0.4.1",
-    "langchain-experimental>=0.4.1",
-    "langchain-groq>=1.1.1",
-    "langchain-huggingface>=1.2.0",
-    "langchain-tavily>=0.2.17",
-    "langchain-text-splitters>=1.1.0",
-    "litellm>=1.81.6",
-    "matplotlib>=3.10.8",
+
+    # 🔐 LangChain (Pinned for NumPy 1.x compatibility)
+    "langchain>=0.3.0,<0.4.0",
+    "langchain-community==0.3.27",
+    "langchain-experimental>=0.3.0,<0.4.0",
+    "langchain-groq>=0.2.0,<0.3.0",
+    "langchain-huggingface>=0.1.0,<0.2.0",
+    "langchain-tavily>=0.1.0,<0.3.0",
+    "langchain-text-splitters>=0.3.0,<0.4.0",
+
+    "litellm>=1.60.0,<2.0.0",
+
+    # 📊 Data stack (NumPy pinned for Torch compatibility)
     "numpy>=1.26.4,<2.0",
-    "pandas>=2.3.3",
-    "passlib[bcrypt]>=1.7.4",
-    "pillow>=12.1.0",
-    "pydantic[email]>=2.12.5",
-    "pymongo>=4.16.0",
-    "pymupdf>=1.26.7",
-    "pytesseract>=0.3.13",
-    "python-jose[cryptography]>=3.5.0",
-    "python-multipart>=0.0.22",
-    "redis>=7.2.0",
-    "sentence-transformers>=5.2.0",
-    "spacy>=3.8.11",
-    "streamlit>=1.53.1",
-    "tiktoken>=0.12.0",
-    "uvicorn>=0.40.0",
+    "pandas>=2.2.0,<2.4.0",
+    "matplotlib>=3.8.0,<3.11.0",
+
+    # 🔥 ML stack
     "torch==2.2.2",
-    "typer>=0.24.0",
+    "sentence-transformers>=2.6.0,<3.0.0",
+    "faiss-cpu>=1.7.4,<1.8.0",
+    "spacy>=3.7.0,<3.9.0",
+    "tiktoken>=0.5.0,<1.0.0",
+
+    # 🧾 Documents / OCR
+    "pillow>=10.0.0,<13.0.0",
+    "pymupdf>=1.23.0,<1.27.0",
+    "pytesseract>=0.3.10,<0.4.0",
+
+    # 🔐 Auth / Security
+    "passlib[bcrypt]>=1.7.4",
+    "python-jose[cryptography]>=3.3.0,<4.0.0",
+    "pydantic[email]>=2.5.0,<3.0.0",
+
+    # 🗄️ Storage
+    "pymongo>=4.6.0,<5.0.0",
+    "redis>=5.0.0,<8.0.0",
+
+    # 🌐 Server
+    "python-multipart>=0.0.6",
+    "uvicorn>=0.27.0,<0.41.0",
+
+    # 🖥️ UI / CLI
+    "streamlit>=1.30.0,<2.0.0",
+    "typer>=0.9.0,<1.0.0",
 ]

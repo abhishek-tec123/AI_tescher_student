@@ -1,4 +1,5 @@
 import re
+import threading
 from studentProfileDetails.learning_progress import (
     normalize_student_preference,
     update_progress_and_regression,
@@ -43,28 +44,16 @@ def handle_chat_intent(
         )
 
     # -----------------------------------------
-    # Update progression BEFORE academic response
+    # Academic Tutor Flow (Vector DB + Agent) - PRIORITY #1
     # -----------------------------------------
-    profile = update_progress_and_regression(
-        student_manager,
-        payload.student_id,
-        payload.subject,
-        profile,
-    )
-    print("Student Profile : ", profile)
-    # -----------------------------------------
+    # Get subject_agent_id for agent introduction
+    subject_agent_id = get_dynamic_agent_id_for_subject(student_manager, payload.student_id, payload.subject)
+    
     # Prepare academic history
-    # -----------------------------------------
     history_context = [
         f"Q: {turn['query']}\nA: {turn['response']}"
         for turn in context
     ]
-
-    # -----------------------------------------
-    # Academic Tutor Flow (Vector DB + Agent)
-    # -----------------------------------------
-    # Get subject_agent_id for agent introduction
-    subject_agent_id = get_dynamic_agent_id_for_subject(student_manager, payload.student_id, payload.subject)
     
     chat = diagnosis_chat(
         student_agent,
@@ -81,38 +70,56 @@ def handle_chat_intent(
     rl_metadata = chat.get("rl_metadata", {})
 
     # -----------------------------------------
-    # Evaluate academic response
+    # Return immediate response to user
     # -----------------------------------------
-    evaluation = evaluate_response(
-        query=payload.query,
-        response=response,
-        subject=payload.subject,
-        profile=profile,
-        confusion_type=confusion_type,
-    )
+    immediate_result = {
+        "response": response,
+        "profile": profile,  # Return current profile, will be updated in background
+        "evaluation": None,  # Will be populated in background
+        "conversation_id": None,  # Will be populated in background
+    }
 
     # -----------------------------------------
-    # Persist profile
+    # Background processing for all database operations
     # -----------------------------------------
-    student_manager.update_subject_preference(
-        payload.student_id,
-        payload.subject,
-        {
-            "confusion_counter": profile["confusion_counter"],
-            "common_mistakes": profile["common_mistakes"],
-            "learning_style": profile["learning_style"],
-            "level": profile["level"],
-            "tone": profile["tone"],
-            "response_length": profile["response_length"],
-            "include_example": profile["include_example"],
-        },
-    )
-
-    # -----------------------------------------
-    # Store conversation (moved to background for faster response)
-    # -----------------------------------------
-    def store_conversation_background():
+    def background_processing():
         try:
+            # Update progression BEFORE academic response
+            updated_profile = update_progress_and_regression(
+                student_manager,
+                payload.student_id,
+                payload.subject,
+                profile,
+            )
+            print("📊 Background profile update completed")
+            
+            # Evaluate academic response
+            evaluation = evaluate_response(
+                query=payload.query,
+                response=response,
+                subject=payload.subject,
+                profile=updated_profile,
+                confusion_type=confusion_type,
+            )
+            print("🧠 Background evaluation completed")
+
+            # Persist profile
+            student_manager.update_subject_preference(
+                payload.student_id,
+                payload.subject,
+                {
+                    "confusion_counter": updated_profile["confusion_counter"],
+                    "common_mistakes": updated_profile["common_mistakes"],
+                    "learning_style": updated_profile["learning_style"],
+                    "level": updated_profile["level"],
+                    "tone": updated_profile["tone"],
+                    "response_length": updated_profile["response_length"],
+                    "include_example": updated_profile["include_example"],
+                },
+            )
+            print("💾 Background profile persistence completed")
+            
+            # Store conversation
             agent_id = get_dynamic_agent_id_for_subject(student_manager, payload.student_id, payload.subject)
             if agent_id:
                 conversation_id = student_manager.add_conversation(
@@ -141,44 +148,34 @@ def handle_chat_intent(
                 )
                 print(f"⚠️ Agent not found for subject '{payload.subject}'. Performance tracking skipped.")
             
-            print(f"🔄 Background conversation storage completed for: {payload.student_id}")
+            print(f"🔄 Background conversation storage completed: {conversation_id}")
+            
+            # Second progression update
+            final_profile = update_progress_and_regression(
+                student_manager,
+                payload.student_id,
+                payload.subject,
+                updated_profile,
+            )
+            print("📈 Background final progression update completed")
+            
+            # Reload normalized profile
+            normalized_profile = normalize_student_preference(
+                student_manager.get_or_create_subject_preference(
+                    payload.student_id, payload.subject
+                )
+            )
+            print("✅ All background processing completed successfully")
+            
         except Exception as e:
-            print(f"❌ Background conversation storage failed: {e}")
+            print(f"❌ Background processing failed: {e}")
     
-    # Start background storage for faster response
-    import threading
-    background_thread = threading.Thread(target=store_conversation_background, daemon=True)
+    # Start background processing for faster response
+    background_thread = threading.Thread(target=background_processing, daemon=True)
     background_thread.start()
-    print(f"🚀 Conversation storage started in background for faster response")
+    print(f"🚀 All database operations moved to background for faster response")
     
-    # Set conversation_id to None for now (will be generated in background)
-    conversation_id = None
-
-    # -----------------------------------------
-    # Update progression AFTER conversation
-    # -----------------------------------------
-    profile = update_progress_and_regression(
-        student_manager,
-        payload.student_id,
-        payload.subject,
-        profile,
-    )
-
-    # -----------------------------------------
-    # Reload normalized profile
-    # -----------------------------------------
-    profile = normalize_student_preference(
-        student_manager.get_or_create_subject_preference(
-            payload.student_id, payload.subject
-        )
-    )
-
-    return {
-        "response": response,
-        "profile": profile,
-        "evaluation": evaluation,
-        "conversation_id": str(conversation_id),
-    }
+    return immediate_result
 
 
 # -------------------------------------------------
