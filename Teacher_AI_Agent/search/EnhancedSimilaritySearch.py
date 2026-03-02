@@ -15,6 +15,7 @@ from search.SimilaritySearch import (
     extract_core_question,
     embed_query,
     find_similar_chunks,
+    find_similar_chunks_in_memory,
     get_llm_response_from_chunk,
     retrieve_chunk_for_query_send_to_llm,
     MIN_SCORE_THRESHOLD,
@@ -36,6 +37,81 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 MONGODB_URI = os.environ.get("MONGODB_URI")
 VECTOR_INDEX_NAME = "vector_index"
 VECTOR_PATH = "embedding.vector"
+
+def _build_safe_out_of_scope_response(query: str, restriction_reason: str):
+    """
+    Central helper to build a safe, curriculum-bound response when no
+    relevant RAG content is available or when content restrictions apply.
+    """
+    safe_msg = (
+        "I'm not able to answer this question from the available learning materials. "
+        "This teaching assistant can only answer using your curriculum content and teacher-provided documents. "
+        "Please try asking with terms from your study materials or consult your teacher for help."
+    )
+    quality_scores = compute_quality_scores(
+        query=query,
+        response_text=safe_msg,
+        retrieved_chunks=[],
+        context_string="",
+    )
+    # Tag that this was blocked by RAG policy, not hallucinated
+    quality_scores["content_restriction"] = restriction_reason
+    return {
+        "response": safe_msg,
+        "quality_scores": quality_scores,
+        "sources": [],
+        "source_summary": [],
+        "chunks_used": 0,
+        "from_cache": False,
+        "content_restriction": restriction_reason,
+    }
+
+
+# -----------------------------
+# Content relevance validation
+# -----------------------------
+def validate_content_relevance(query: str, chunk_text: str, min_keyword_matches: int = 2) -> bool:
+    """
+    Validates that retrieved chunk content is actually relevant to the query.
+    Prevents false positives by checking keyword presence and semantic relevance.
+    Slightly relaxed for very short, profile-style questions so that
+    teacher resume/profile chunks can be used when appropriate.
+    """
+    if not query or not chunk_text:
+        return False
+    
+    # Extract key terms from query (remove common words)
+    query_lower = query.lower()
+    query_words = [word.strip("?.,!;:()[]{}\"'") for word in query_lower.split() 
+                   if len(word) > 2 and word not in ['the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'with', 'by', 'is', 'are', 'was', 'were', 'what', 'how', 'when', 'where', 'why', 'tell', 'me', 'explain', 'describe']]
+    
+    chunk_lower = chunk_text.lower()
+    
+    # Count keyword matches
+    keyword_matches = 0
+    for word in query_words:
+        if word in chunk_lower:
+            keyword_matches += 1
+    
+    # Dynamically relax requirement for very short/profile-style queries
+    effective_min_matches = min_keyword_matches
+    if len(query_words) <= 3:
+        effective_min_matches = 1
+    
+    # Require minimum keyword matches
+    if keyword_matches < effective_min_matches:
+        logger.info(f"[ContentValidation] Rejected chunk: only {keyword_matches}/{len(query_words)} keywords matched (required {effective_min_matches})")
+        return False
+    
+    # Additional check: chunk should not be too generic
+    generic_phrases = ['this is a', 'this is an', 'it is a', 'it is an', 'here is', 'there is', 'the following', 'as follows']
+    for phrase in generic_phrases:
+        if chunk_lower.strip().startswith(phrase):
+            logger.info(f"[ContentValidation] Rejected chunk: starts with generic phrase '{phrase}'")
+            return False
+    
+    logger.info(f"[ContentValidation] Accepted chunk: {keyword_matches}/{len(query_words)} keywords matched (required {effective_min_matches})")
+    return True
 
 # -----------------------------
 # Async MongoDB Connection Pool
@@ -87,21 +163,27 @@ def _cache_vector_results(cache_key: str, results):
         oldest_key = min(_vector_cache.keys(), key=lambda k: _vector_cache[k][1])
         del _vector_cache[oldest_key]
 
-async def _search_agent_collection_async(db_name: str, collection_name: str, query_embedding, top_k: int):
-    """Async wrapper for agent collection search."""
+async def _search_agent_collection_async(db_name: str, collection_name: str, query_embedding, top_k: int, query_text=""):
+    """Async wrapper for agent collection search with content validation."""
     def _search():
         try:
             client = get_async_client()
             if db_name in client.list_database_names() and collection_name in client[db_name].list_collection_names():
                 agent_collection = client[db_name][collection_name]
-                agent_results = find_similar_chunks(query_embedding, agent_collection, limit=top_k)
+                agent_results = find_similar_chunks(query_embedding, agent_collection, limit=top_k, query=query_text)
                 
-                # Mark results as agent-specific
+                # Apply additional content validation
+                validated_results = []
                 for result in agent_results:
-                    result["source_type"] = "agent"
-                    result["source_name"] = f"{db_name}.{collection_name}"
+                    chunk_text = result.get('text', result.get('chunk_text', ''))
+                    if validate_content_relevance(query_text, chunk_text):
+                        result["source_type"] = "agent"
+                        result["source_name"] = f"{db_name}.{collection_name}"
+                        validated_results.append(result)
+                    else:
+                        logger.info(f"[EnhancedSearch] Skipping agent chunk due to failed content validation")
                 
-                return agent_results, f"{db_name}.{collection_name}"
+                return validated_results, f"{db_name}.{collection_name}"
             return [], None
         except Exception as e:
             logger.error(f"Failed to search agent collection: {e}")
@@ -110,8 +192,8 @@ async def _search_agent_collection_async(db_name: str, collection_name: str, que
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(_executor, _search)
 
-async def _search_shared_documents_async(subject_agent_id: str, query_embedding, top_k: int):
-    """Async wrapper for shared documents search."""
+async def _search_shared_documents_async(subject_agent_id: str, query_embedding, top_k: int, query_text=""):
+    """Async wrapper for shared documents search with content validation."""
     def _search():
         try:
             # Get agent metadata to check if global RAG is enabled
@@ -141,14 +223,18 @@ async def _search_shared_documents_async(subject_agent_id: str, query_embedding,
                 doc_id = shared_doc["document_id"]
                 doc_name = shared_doc["document_name"]
                 
-                # Search within this shared document
-                shared_results = find_similar_chunks(
-                    query_embedding, 
-                    shared_collection, 
-                    limit=top_k // len(enabled_shared_docs) if enabled_shared_docs else top_k
+                # Search within this shared document using a more permissive
+                # similarity threshold, relying on strict content validation
+                # and document filters to keep results safe and RAG-only.
+                shared_results = find_similar_chunks_in_memory(
+                    query_embedding,
+                    shared_collection,
+                    top_k=top_k // len(enabled_shared_docs) if enabled_shared_docs else top_k,
+                    similarity_threshold=0.0,
+                    query_text=query_text
                 )
                 
-                # Filter results to only include chunks from this document
+                # Filter results to only include chunks from this document AND pass content validation
                 filtered_results = []
                 for result in shared_results:
                     is_match = (
@@ -158,9 +244,14 @@ async def _search_shared_documents_async(subject_agent_id: str, query_embedding,
                     )
                     
                     if is_match:
-                        result["source_type"] = "shared"
-                        result["source_name"] = f"shared:{doc_name}"
-                        filtered_results.append(result)
+                        # Apply content validation
+                        chunk_text = result.get('text', result.get('chunk_text', ''))
+                        if validate_content_relevance(query_text, chunk_text):
+                            result["source_type"] = "shared"
+                            result["source_name"] = f"shared:{doc_name}"
+                            filtered_results.append(result)
+                        else:
+                            logger.info(f"[EnhancedSearch] Skipping shared chunk due to failed content validation")
                 
                 all_shared_results.extend(filtered_results)
                 if filtered_results:
@@ -241,13 +332,19 @@ async def retrieve_chunks_with_shared_knowledge_async(
     # -----------------------------
     # Extract core question for embedding
     # -----------------------------
+    # Even when RL is disabled for shared documents, we still extract the
+    # student's core question from the formatted prompt to drive retrieval.
+    core_question = extract_core_question(query)
     if disable_rl:
-        # For shared documents, use original query to avoid RL interference
-        core_question = query
-        logger.info(f"RL disabled for shared documents - using original query: '{query[:100]}...'")
+        logger.info(
+            f"RL disabled for shared documents - using extracted core question from original prompt: "
+            f"'{core_question[:100]}...'"
+        )
     else:
-        core_question = extract_core_question(query)
-        logger.info(f"Core question extracted for embedding: '{core_question[:100]}...' (full query length: {len(query)})")
+        logger.info(
+            f"Core question extracted for embedding: '{core_question[:100]}...' "
+            f"(full query length: {len(query)})"
+        )
     
     # Generate query embedding using core question only
     query_embedding = embed_query(core_question, embedding_model)
@@ -258,10 +355,12 @@ async def retrieve_chunks_with_shared_knowledge_async(
     search_tasks = []
     
     if db_name and collection_name:
-        search_tasks.append(_search_agent_collection_async(db_name, collection_name, query_embedding, top_k))
+        # Use the extracted core_question for similarity + validation
+        search_tasks.append(_search_agent_collection_async(db_name, collection_name, query_embedding, top_k, core_question))
     
     if subject_agent_id:
-        search_tasks.append(_search_shared_documents_async(subject_agent_id, query_embedding, top_k))
+        # Use the extracted core_question for similarity + validation
+        search_tasks.append(_search_shared_documents_async(subject_agent_id, query_embedding, top_k, core_question))
     
     # Execute searches in parallel
     search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
@@ -308,42 +407,27 @@ async def retrieve_chunks_with_shared_knowledge_async(
     raw_agent_results.sort(key=lambda x: x.get('score', 0), reverse=True)
     raw_shared_results.sort(key=lambda x: x.get('score', 0), reverse=True)
     
-    # Apply high threshold filtering (>0.5) to both agent and shared results
-    HIGH_THRESHOLD = 0.3  # Strict threshold for all content
+    # Apply high threshold filtering (>0.3) to agent results and a slightly
+    # more permissive threshold for shared/global docs.
+    AGENT_HIGH_THRESHOLD = 0.3
+    SHARED_HIGH_THRESHOLD = 0.2
     filtered_agent_results = [
         doc for doc in raw_agent_results
-        if doc.get("score", 0) >= HIGH_THRESHOLD
+        if doc.get("score", 0) >= AGENT_HIGH_THRESHOLD
     ]
     
     filtered_shared_results = [
         doc for doc in raw_shared_results
-        if doc.get("score", 0) >= HIGH_THRESHOLD
+        if doc.get("score", 0) >= SHARED_HIGH_THRESHOLD
     ]
     
-    logger.info(f"✅ Agent chunks passing threshold {HIGH_THRESHOLD}: {len(filtered_agent_results)}")
-    logger.info(f"✅ Shared chunks passing threshold {HIGH_THRESHOLD}: {len(filtered_shared_results)}")
+    logger.info(f"✅ Agent chunks passing threshold {AGENT_HIGH_THRESHOLD}: {len(filtered_agent_results)}")
+    logger.info(f"✅ Shared chunks passing threshold {SHARED_HIGH_THRESHOLD}: {len(filtered_shared_results)}")
     
-    # If neither agent nor shared chunks pass the threshold, do NOT call the LLM
+    # ABSOLUTE RULE: If neither agent nor shared chunks pass the threshold, NEVER call the LLM
     if not filtered_agent_results and not filtered_shared_results:
-        logger.warning("No relevant chunks from agent or shared documents met threshold requirements. Not calling LLM.")
-        safe_msg = (
-            "I’m not able to answer this question from the available learning materials. "
-            "Please try rephrasing your question or ask your teacher for help."
-        )
-        quality_scores = compute_quality_scores(
-            query=query,
-            response_text=safe_msg,
-            retrieved_chunks=[],
-            context_string="",
-        )
-        result = {
-            "response": safe_msg,
-            "quality_scores": quality_scores,
-            "sources": [],
-            "source_summary": [],
-            "chunks_used": 0,
-            "from_cache": False
-        }
+        logger.error("🚫 NO RELEVANT CONTENT FOUND: No chunks from agent or shared documents met threshold requirements. LLM call BLOCKED.")
+        result = _build_safe_out_of_scope_response(query, "no_relevant_content")
         _cache_vector_results(cache_key, result)
         return result
     
@@ -507,12 +591,16 @@ def _fallback_sync_search(
         }
 
     # Extract core question and embed
+    # Even when RL is disabled for shared documents, use the extracted core
+    # question (not the full formatted prompt) for retrieval.
+    core_question = extract_core_question(query)
     if disable_rl:
-        # For shared documents, use original query to avoid RL interference
-        core_question = query
-        logger.info(f"RL disabled for shared documents - using original query: '{query[:100]}...'")
+        logger.info(
+            f"RL disabled for shared documents - using extracted core question from original prompt: "
+            f"'{core_question[:100]}...'"
+        )
     else:
-        core_question = extract_core_question(query)
+        logger.info(f"Core question extracted for embedding (sync): '{core_question[:100]}...'")
     query_embedding = embed_query(core_question, embedding_model)
 
     # Generate cache key for this query
@@ -522,28 +610,37 @@ def _fallback_sync_search(
     all_results = []
     sources_info = []
 
-    # Agent collection search
+    # Agent collection search with content validation
     if db_name and collection_name:
         try:
             client = get_async_client()
             if db_name in client.list_database_names() and collection_name in client[db_name].list_collection_names():
                 agent_collection = client[db_name][collection_name]
-                agent_results = find_similar_chunks(query_embedding, agent_collection, limit=top_k)
+                # Use core_question for similarity + validation
+                agent_results = find_similar_chunks(query_embedding, agent_collection, limit=top_k, query=core_question)
                 
+                # Apply additional content validation
+                validated_results = []
                 for result in agent_results:
-                    result["source_type"] = "agent"
-                    result["source_name"] = f"{db_name}.{collection_name}"
+                    chunk_text = result.get('text', result.get('chunk_text', ''))
+                    if validate_content_relevance(query, chunk_text):
+                        result["source_type"] = "agent"
+                        result["source_name"] = f"{db_name}.{collection_name}"
+                        validated_results.append(result)
+                    else:
+                        logger.info(f"[EnhancedSearch] Skipping agent chunk due to failed content validation (sync)")
                 
-                all_results.extend(agent_results)
-                sources_info.append({
-                    "type": "agent",
-                    "name": f"{db_name}.{collection_name}",
-                    "results_count": len(agent_results)
-                })
+                all_results.extend(validated_results)
+                if validated_results:
+                    sources_info.append({
+                        "type": "agent",
+                        "name": f"{db_name}.{collection_name}",
+                        "results_count": len(validated_results)
+                    })
         except Exception as e:
             logger.error(f"Failed to search agent collection: {e}")
 
-    # Shared documents search (simplified)
+    # Shared documents search with content validation (simplified)
     if subject_agent_id:
         try:
             from Teacher_AI_Agent.dbFun.get_agent_data import get_agent_data
@@ -561,10 +658,15 @@ def _fallback_sync_search(
                         doc_id = shared_doc["document_id"]
                         doc_name = shared_doc["document_name"]
                         
-                        shared_results = find_similar_chunks(
-                            query_embedding, 
-                            shared_collection, 
-                            limit=top_k // len(enabled_shared_docs)
+                        # Use in-memory cosine search with a more permissive
+                        # similarity threshold for shared/global docs, driven
+                        # by the extracted core_question.
+                        shared_results = find_similar_chunks_in_memory(
+                            query_embedding,
+                            shared_collection,
+                            top_k=top_k // len(enabled_shared_docs),
+                            similarity_threshold=0.0,
+                            query_text=core_question
                         )
                         
                         filtered_results = []
@@ -576,9 +678,14 @@ def _fallback_sync_search(
                             )
                             
                             if is_match:
-                                result["source_type"] = "shared"
-                                result["source_name"] = f"shared:{doc_name}"
-                                filtered_results.append(result)
+                                # Apply content validation
+                                chunk_text = result.get('text', result.get('chunk_text', ''))
+                                if validate_content_relevance(query, chunk_text):
+                                    result["source_type"] = "shared"
+                                    result["source_name"] = f"shared:{doc_name}"
+                                    filtered_results.append(result)
+                                else:
+                                    logger.info(f"[EnhancedSearch] Skipping shared chunk due to failed content validation (sync)")
                         
                         all_results.extend(filtered_results)
                         if filtered_results:
@@ -601,42 +708,27 @@ def _fallback_sync_search(
     logger.info(f"Total raw agent chunks (sync): {len(agent_results)}")
     logger.info(f"Total raw shared chunks (sync): {len(shared_results)}")
     
-    # Apply high threshold filtering (>0.5) to both agent and shared results
-    HIGH_THRESHOLD = 0.2  # Strict threshold for all content
+    # Apply high threshold filtering (>0.3) to agent results and slightly
+    # more permissive threshold for shared/global docs.
+    AGENT_HIGH_THRESHOLD = 0.3
+    SHARED_HIGH_THRESHOLD = 0.2
     filtered_agent_results = [
         doc for doc in agent_results
-        if doc.get("score", 0) >= HIGH_THRESHOLD
+        if doc.get("score", 0) >= AGENT_HIGH_THRESHOLD
     ]
     
     filtered_shared_results = [
         doc for doc in shared_results
-        if doc.get("score", 0) >= HIGH_THRESHOLD
+        if doc.get("score", 0) >= SHARED_HIGH_THRESHOLD
     ]
     
-    logger.info(f"✅ Agent chunks passing threshold {HIGH_THRESHOLD} (sync): {len(filtered_agent_results)}")
-    logger.info(f"✅ Shared chunks passing threshold {HIGH_THRESHOLD} (sync): {len(filtered_shared_results)}")
+    logger.info(f"✅ Agent chunks passing threshold {AGENT_HIGH_THRESHOLD} (sync): {len(filtered_agent_results)}")
+    logger.info(f"✅ Shared chunks passing threshold {SHARED_HIGH_THRESHOLD} (sync): {len(filtered_shared_results)}")
     
-    # If neither agent nor shared chunks pass the threshold, do NOT call the LLM
+    # ABSOLUTE RULE: If neither agent nor shared chunks pass the threshold, NEVER call the LLM
     if not filtered_agent_results and not filtered_shared_results:
-        logger.warning("No relevant chunks from agent or shared documents met threshold requirements (sync). Not calling LLM.")
-        safe_msg = (
-            "I’m not able to answer this question from the available learning materials. "
-            "Please try rephrasing your question or ask your teacher for help."
-        )
-        quality_scores = compute_quality_scores(
-            query=query,
-            response_text=safe_msg,
-            retrieved_chunks=[],
-            context_string="",
-        )
-        result = {
-            "response": safe_msg,
-            "quality_scores": quality_scores,
-            "sources": [],
-            "source_summary": [],
-            "chunks_used": 0,
-            "from_cache": False
-        }
+        logger.error("🚫 NO RELEVANT CONTENT FOUND (sync): No chunks from agent or shared documents met threshold requirements. LLM call BLOCKED.")
+        result = _build_safe_out_of_scope_response(query, "no_relevant_content")
         _cache_vector_results(cache_key, result)
         return result
     
@@ -679,7 +771,13 @@ def _fallback_sync_search(
     
     # Compute quality scores if not provided
     if not quality_scores:
+        logger.info(f"🔍 Computing quality scores with {len(all_results)} chunks")
+        for i, chunk in enumerate(all_results):
+            score = chunk.get("score", 0)
+            source_type = chunk.get("source_type", "unknown")
+            logger.info(f"   - Chunk {i+1}: score={score}, source_type={source_type}")
         quality_scores = compute_quality_scores(query, response_text, all_results, result_string)
+        logger.info(f"📊 Final quality scores: {quality_scores}")
     
     result = {
         "response": response_text,

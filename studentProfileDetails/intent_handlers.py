@@ -113,11 +113,19 @@ def handle_chat_intent(
     # -----------------------------------------
     # Return immediate response with actual values
     # -----------------------------------------
+    # Fetch current summary for immediate response
+    try:
+        context_summary = student_manager.get_subject_summary(payload.student_id, payload.subject)
+    except Exception as e:
+        print(f"⚠️ Failed to fetch existing summary in handle_chat_intent: {e}")
+        context_summary = None
+    
     immediate_result = {
         "response": response,
         "profile": updated_profile,  # Return updated profile
         "evaluation": {"status": "processing"},  # Placeholder evaluation
         "conversation_id": str(conversation_id),  # Return actual conversation ID
+        "context_summary": context_summary,  # Add context summary to response
     }
 
     # -----------------------------------------
@@ -147,16 +155,28 @@ def handle_chat_intent(
                 print(f"   - Agent ID: {agent_id}")
                 print(f"   - Quality Scores: {evaluation}")
                 print(f"   - Student ID: {payload.student_id}")
-            else:
-                print(f"⚠️ Agent not found for subject '{payload.subject}'. Performance tracking skipped.")
+                print(f"   - Performance Update Result: {performance_update_result}")
             
-            # Persist profile (non-critical for immediate response)
+            # Update conversation summary in background
+            from studentProfileDetails.summrizeStdConv import update_running_summary
+            new_entry = {
+                "query": payload.query,
+                "response": response,
+                "evolution": evaluation
+            }
+            update_running_summary(
+                student_id=payload.student_id,
+                subject=payload.subject,
+                new_entry=new_entry,
+                student_manager=student_manager
+            )
+            print("📝 Background summary update completed")
+            
+            # Update student profile with new preferences (moved to background)
             student_manager.update_subject_preference(
-                payload.student_id,
-                payload.subject,
-                {
-                    "confusion_counter": updated_profile["confusion_counter"],
-                    "common_mistakes": updated_profile["common_mistakes"],
+                student_id=payload.student_id,
+                subject=payload.subject,
+                preference={
                     "learning_style": updated_profile["learning_style"],
                     "level": updated_profile["level"],
                     "tone": updated_profile["tone"],

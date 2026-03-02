@@ -152,10 +152,30 @@ def compute_quality_scores(
     # RAG Relevance: derive from chunk similarity scores (0-1 -> 0-100%)
     if retrieved_chunks:
         chunk_scores = [c.get("score", 0) for c in retrieved_chunks if "score" in c]
+        logger.info(f"🔍 RAG Relevance Debug:")
+        logger.info(f"   - Total chunks: {len(retrieved_chunks)}")
+        logger.info(f"   - Chunks with scores: {len(chunk_scores)}")
+        logger.info(f"   - Chunk scores: {chunk_scores}")
         if chunk_scores:
             avg_score = sum(chunk_scores) / len(chunk_scores)
-            # Cosine similarity 0.4-1.0 maps roughly to 40-100%
-            scores["rag_relevance"] = round(min(100, max(0, (avg_score - 0.4) / 0.6 * 100)), 0)
+            # Fixed RAG relevance calculation: 
+            # Scores 0.0-0.2 = 0%, 0.2-0.4 = 25%, 0.4-0.6 = 50%, 0.6-0.8 = 75%, 0.8-1.0 = 100%
+            if avg_score >= 0.8:
+                rag_relevance = 100
+            elif avg_score >= 0.6:
+                rag_relevance = 75
+            elif avg_score >= 0.4:
+                rag_relevance = 50
+            elif avg_score >= 0.2:
+                rag_relevance = 25
+            else:
+                rag_relevance = 0
+            
+            scores["rag_relevance"] = rag_relevance
+            logger.info(f"   - Average score: {avg_score}")
+            logger.info(f"   - RAG relevance: {rag_relevance}%")
+        else:
+            logger.info(f"   - No chunk scores found, RAG relevance remains 0%")
 
     # LLM-based scores: model_certainty, answer_completeness, hallucination_risk
     groq_api_key = os.getenv("GROQ_API_KEY")

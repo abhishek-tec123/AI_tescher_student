@@ -26,7 +26,7 @@ VECTOR_INDEX_NAME = "vector_index"
 VECTOR_PATH = "embedding.vector"
 
 TOP_K = 10
-MIN_SCORE_THRESHOLD = 0.2  # Threshold for chunk selection - lowered for better recall
+MIN_SCORE_THRESHOLD = 0.3  # Threshold for chunk selection - balanced with content validation
 
 # -----------------------------
 # Response Caching System
@@ -232,24 +232,68 @@ def embed_query(query: str, embedding_model) -> list:
     return embedding_model.embed_query(query)
 
 # -----------------------------
+# Content relevance validation
+# -----------------------------
+def validate_content_relevance(query: str, chunk_text: str, min_keyword_matches: int = 2) -> bool:
+    """
+    Validates that retrieved chunk content is actually relevant to the query.
+    Prevents false positives by checking keyword presence and semantic relevance.
+    Slightly relaxed for very short, profile-style questions so that
+    teacher resume/profile chunks can be used when appropriate.
+    """
+    if not query or not chunk_text:
+        return False
+    
+    # Extract key terms from query (remove common words)
+    query_lower = query.lower()
+    query_words = [word.strip("?.,!;:()[]{}\"'") for word in query_lower.split() 
+                   if len(word) > 2 and word not in ['the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'with', 'by', 'is', 'are', 'was', 'were', 'what', 'how', 'when', 'where', 'why', 'tell', 'me', 'explain', 'describe']]
+    
+    chunk_lower = chunk_text.lower()
+    
+    # Count keyword matches
+    keyword_matches = 0
+    for word in query_words:
+        if word in chunk_lower:
+            keyword_matches += 1
+    
+    # Dynamically relax requirement for very short/profile-style queries
+    effective_min_matches = min_keyword_matches
+    if len(query_words) <= 3:
+        effective_min_matches = 1
+    
+    # Require minimum keyword matches
+    if keyword_matches < effective_min_matches:
+        logger.info(f"[ContentValidation] Rejected chunk: only {keyword_matches}/{len(query_words)} keywords matched (required {effective_min_matches})")
+        return False
+    
+    # Additional check: chunk should not be too generic
+    generic_phrases = ['this is a', 'this is an', 'it is a', 'it is an', 'here is', 'there is', 'the following', 'as follows']
+    for phrase in generic_phrases:
+        if chunk_lower.strip().startswith(phrase):
+            logger.info(f"[ContentValidation] Rejected chunk: starts with generic phrase '{phrase}'")
+            return False
+    
+    logger.info(f"[ContentValidation] Accepted chunk: {keyword_matches}/{len(query_words)} keywords matched (required {effective_min_matches})")
+    return True
+
+# -----------------------------
 # Vector search helpers
 # -----------------------------
 def find_similar_chunks(query_embedding, collection, query="", num_candidates=100, limit=TOP_K, index_name=VECTOR_INDEX_NAME):
-    """Cosine similarity search with regex fallback."""
-    logger.info(f"[CosineSearch] Using in-memory cosine similarity search")
+    """Cosine similarity search with NO fallback - balanced threshold with content validation."""
+    logger.info(f"[CosineSearch] Using in-memory cosine similarity search ONLY")
     
-    # Try cosine similarity first
-    cosine_results = find_similar_chunks_in_memory(query_embedding, collection, top_k=limit, similarity_threshold=0.2)
+    # ONLY use cosine similarity - NO FALLBACKS ALLOWED
+    cosine_results = find_similar_chunks_in_memory(query_embedding, collection, top_k=limit, similarity_threshold=0.3, query_text=query)
     
     if cosine_results:
         logger.info(f"[CosineSearch] Cosine similarity returned {len(cosine_results)} results")
         return cosine_results
-    
-    # If cosine similarity fails, try regex fallback
-    logger.info(f"[CosineSearch] No cosine similarity results, trying regex fallback")
-    regex_results = find_similar_chunks_regex_fallback(query, collection, limit=limit)
-    
-    return regex_results
+    else:
+        # ABSOLUTE RULE: No results = NO FALLBACK - return empty list
+        logger.error(f"🚫 COSINE SEARCH FAILED: No results found and NO fallbacks allowed. Returning empty list.")
+        return []
 
 def find_similar_chunks_regex_fallback(query, collection, limit=TOP_K):
     """Regex-based fallback search when cosine similarity fails."""
@@ -381,9 +425,9 @@ def find_similar_chunks_regex_fallback(query, collection, limit=TOP_K):
             logger.error(f"[RegexSearch] Even sampling failed: {e2}")
             return []
 
-def find_similar_chunks_in_memory(query_embedding, collection, top_k=TOP_K, similarity_threshold=0.2):
-    """Fallback in-memory cosine similarity search."""
-    logger.info(f"[InMemorySearch] Starting in-memory cosine similarity search")
+def find_similar_chunks_in_memory(query_embedding, collection, top_k=TOP_K, similarity_threshold=0.3, query_text=""):
+    """In-memory cosine similarity search with balanced threshold and content validation."""
+    logger.info(f"[InMemorySearch] Starting in-memory cosine similarity search with threshold {similarity_threshold}")
     # Match the current nested schema used when storing documents
     docs = list(
         collection.find(
@@ -424,24 +468,32 @@ def find_similar_chunks_in_memory(query_embedding, collection, top_k=TOP_K, simi
         chunk_text = chunk_container.get("text", "")
 
         similarity_score = cosine_similarity(query_embedding, embedding_vector)
-        scored.append(
-            {
-                # Normalize into the flat structure expected downstream
-                "unique_id": unique_id,
-                "unique_chunk_id": unique_chunk_id,
-                "chunk_text": chunk_text,
-                "score": similarity_score,
-                "subject_agent_id": doc.get("subject_agent_id"),
-                "document_id": doc.get("document_id"),
-                "document": document_container,
-                "chunk": doc.get("chunk"),
-                "agent_metadata": doc.get("agent_metadata"),
-            }
-        )
+        
+        # FIRST check similarity threshold
+        if similarity_score >= similarity_threshold:
+            # THEN validate content relevance if query text is provided
+            if query_text and not validate_content_relevance(query_text, chunk_text):
+                logger.info(f"[InMemorySearch] Skipping chunk {unique_chunk_id} due to failed content validation")
+                continue
+                
+            scored.append(
+                {
+                    # Normalize into the flat structure expected downstream
+                    "unique_id": unique_id,
+                    "unique_chunk_id": unique_chunk_id,
+                    "chunk_text": chunk_text,
+                    "score": similarity_score,
+                    "subject_agent_id": doc.get("subject_agent_id"),
+                    "document_id": doc.get("document_id"),
+                    "document": document_container,
+                    "chunk": doc.get("chunk"),
+                    "agent_metadata": doc.get("agent_metadata"),
+                }
+            )
 
     scored.sort(key=lambda x: x["score"], reverse=True)
     top_results = scored[:top_k]
-    logger.info(f"[InMemorySearch] Returning {len(top_results)} results, top score: {top_results[0]['score'] if top_results else 0:.4f}")
+    logger.info(f"[InMemorySearch] Returning {len(top_results)} results above threshold {similarity_threshold}, top score: {top_results[0]['score'] if top_results else 0:.4f}")
     return top_results
 
 # -----------------------------
@@ -455,8 +507,24 @@ def get_llm_response_from_chunk(
 ) -> str:
     """
     Calls the Groq LLM with a combined result string.
+    STRICT VALIDATION: Only processes responses if valid content is provided.
     Returns the response text.
     """
+    # ABSOLUTE CONTENT VALIDATION
+    if not result_string or not result_string.strip():
+        logger.error("🚫 EMPTY CONTENT: No valid content provided to LLM. Response BLOCKED.")
+        return (
+            "I don't have access to any relevant learning materials for this question. "
+            "Please ask about topics covered in your current curriculum or consult your teacher."
+        )
+    
+    if len(result_string.strip()) < 50:
+        logger.error("🚫 INSUFFICIENT CONTENT: Content too short for meaningful response. Response BLOCKED.")
+        return (
+            "The available learning materials don't contain enough information about this topic. "
+            "Please try a more specific question related to your curriculum."
+        )
+    
     try:
         response_text = generate_response_from_groq(
             input_text=result_string,
@@ -465,17 +533,18 @@ def get_llm_response_from_chunk(
         )
 
         if not response_text.strip():
-            logger.warning("LLM returned empty response.")
+            logger.warning("LLM returned empty response despite valid content.")
             return (
-                "I don’t have knowledge about this topic. "
-                "You may refer to another agent source."
+                "I'm not able to generate a response from the available learning materials. "
+                "Please try rephrasing your question or ask your teacher for clarification."
             )
 
+        logger.info(f"✅ LLM response generated successfully ({len(response_text)} chars)")
         return response_text
 
     except Exception as e:
-        logger.error(f"Groq LLM invocation failed: {e}")
-        return "I don’t have knowledge about this topic. You may refer to another agent."
+        logger.error(f"🚫 LLM invocation failed: {e}")
+        return "I'm not able to process this question with the available learning materials. Please ask your teacher for help."
 
 # -----------------------------
 # Main retrieval + LLM
@@ -565,17 +634,12 @@ def retrieve_chunk_for_query_send_to_llm(
     logger.info(f"[VectorSearch] Atlas search returned {len(results)} results")
 
     if not results:
-        logger.info("[VectorSearch] No results from Atlas, using in-memory fallback.")
-        results = find_similar_chunks_in_memory(query_embedding, collection, top_k=top_k)
-        logger.info(f"[VectorSearch] In-memory fallback returned {len(results)} results")
-
-    if not results:
-        # No chunks retrieved at all (empty collection or vector search failure).
-        # Do NOT fall back to LLM without RAG context – return a safe message.
-        logger.warning("No chunks retrieved from similarity search. Not calling LLM without context.")
+        # ABSOLUTE RULE: No chunks retrieved = NO LLM call - no exceptions
+        logger.error("🚫 NO CHUNKS RETRIEVED: Vector search returned no results. LLM call BLOCKED.")
         safe_msg = (
-            "I’m not able to answer this question from the available learning materials. "
-            "Please try rephrasing your question or ask your teacher for help."
+            "I'm not able to answer this question from the available learning materials. "
+            "This question appears to be outside the scope of the current curriculum. "
+            "Please try rephrasing your question with terms from your study materials or ask your teacher for help."
         )
         quality_scores = compute_quality_scores(
             query=query,
@@ -583,7 +647,7 @@ def retrieve_chunk_for_query_send_to_llm(
             retrieved_chunks=[],
             context_string="",
         )
-        return {"response": safe_msg, "quality_scores": quality_scores}
+        return {"response": safe_msg, "quality_scores": quality_scores, "content_restriction": "no_chunks_found"}
 
     # -----------------------------
     # LOG ALL retrieved chunks
@@ -597,23 +661,21 @@ def retrieve_chunk_for_query_send_to_llm(
         )
 
     # -----------------------------
-    # Filter by similarity threshold
+    # Filter by similarity threshold - BALANCED WITH CONTENT VALIDATION
     # -----------------------------
+    MIN_SCORE_THRESHOLD = 0.3  # Threshold for chunk selection - content validation prevents false positives
     filtered_results = [
         doc for doc in results
         if doc.get("score", 0) >= MIN_SCORE_THRESHOLD
     ]
 
     if not filtered_results:
-        # If nothing passes the similarity threshold, do NOT call the LLM.
-        # This avoids answers that rely purely on model prior knowledge.
-        logger.warning(
-            f"No chunks passed MIN_SCORE_THRESHOLD={MIN_SCORE_THRESHOLD}. "
-            "Not calling LLM without RAG context."
-        )
+        # ABSOLUTE RULE: If nothing passes the similarity threshold, NEVER call the LLM
+        logger.error(f"🚫 NO CHUNKS PASSED THRESHOLD: No chunks passed MIN_SCORE_THRESHOLD={MIN_SCORE_THRESHOLD}. LLM call BLOCKED.")
         safe_msg = (
-            "I’m not able to find relevant content in the learning materials for this question. "
-            "Please try asking it in a different way or consult your teacher."
+            "I'm not able to find relevant content in the learning materials for this question. "
+            "This question appears to be outside the scope of the current curriculum. "
+            "Please try asking it in a different way using terms from your study materials or consult your teacher."
         )
         quality_scores = compute_quality_scores(
             query=query,
@@ -621,7 +683,7 @@ def retrieve_chunk_for_query_send_to_llm(
             retrieved_chunks=[],
             context_string="",
         )
-        return {"response": safe_msg, "quality_scores": quality_scores}
+        return {"response": safe_msg, "quality_scores": quality_scores, "content_restriction": "below_threshold"}
 
     # -----------------------------
     # LOG accepted chunks with content
@@ -674,4 +736,4 @@ def retrieve_chunk_for_query_send_to_llm(
     # -----------------------------
     response_cache.cache_response(query, response_text, quality_scores, student_id)
 
-    return {"response": response_text, "quality_scores": quality_scores, "from_cache": False}
+    return {"response": response_text, "quality_scores": quality_scores, "from_cache": False, "content_restriction": "none"}

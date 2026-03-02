@@ -384,12 +384,13 @@ def queryRouter(
 
         context_store[payload.student_id] = session_context[-10:]
 
-    # � Skip synchronous summary fetch for faster response
-    # Summary is now updated in background, so we'll use cached data or None
-    context_summary = None  # Will be updated in background
-    
-    # Optional: You could cache the previous summary in memory if needed
-    # context_summary = context_summary_cache.get(f"{payload.student_id}_{payload.subject}")
+    # Fetch current summary from MongoDB for immediate response
+    try:
+        context_summary = student_manager.get_subject_summary(payload.student_id, payload.subject)
+        print(f"📖 Retrieved existing summary for {payload.student_id}_{payload.subject}")
+    except Exception as e:
+        print(f"⚠️ Failed to fetch existing summary: {e}")
+        context_summary = None
 
     return JSONResponse(
         content={
