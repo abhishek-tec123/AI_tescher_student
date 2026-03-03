@@ -56,12 +56,15 @@ def generate_response_from_groq(
     profile_instructions.append(f"Target student level: {profile.level}.")
     profile_instructions.append(f"Use a {profile.tone} tone.")
     profile_instructions.append(f"Adapt explanation to a {profile.learning_style} learning style.")
-    if profile.response_length == "very short":
-        profile_instructions.append("CRITICAL: Response MUST be VERY SHORT (2-4 sentences max). No long explanations, no multiple examples.")
-    elif profile.response_length == "short":
-        profile_instructions.append("Keep response SHORT (one short paragraph).")
+    # Enhanced response length instructions with 3 levels (short, medium, very long)
+    if profile.response_length == "short":
+        profile_instructions.append("Keep response SHORT (2-3 paragraphs). Include key concept and basic explanation with minimal examples.")
+    elif profile.response_length == "medium":
+        profile_instructions.append("Provide MEDIUM length response (3-4 paragraphs). Include main concept, explanation, and one clear example.")
+    elif profile.response_length == "very long":
+        profile_instructions.append("Provide VERY LONG response (5+ paragraphs). Include comprehensive explanation, multiple examples, context, and deeper insights.")
     else:
-        profile_instructions.append(f"Response length should be {profile.response_length}.")
+        profile_instructions.append("Provide VERY LONG response (5+ paragraphs). Include comprehensive explanation, multiple examples, context, and deeper insights.")
     if profile.include_example:
         profile_instructions.append("Include an example to illustrate the concept.")
     if profile.common_mistakes:

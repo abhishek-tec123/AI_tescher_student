@@ -354,13 +354,15 @@ Avoid robotic formatting.
     if session_context:
         prompt += f"\nPrevious conversation (Last 5 turns for context only):\n{session_context}\n"
 
-    # Response length control (updated: very long, long, short only)
-    if response_length == "very long":
-        prompt += "\nProvide comprehensive detailed explanation with examples and context.\n"
-    elif response_length == "short":
-        prompt += "\nKeep response concise but structured in one short explanation.\n"
-    else:  # long (default)
-        prompt += "\nProvide detailed but focused explanation.\n"
+    # Response length control (simplified: 3-level system - short, medium, very long)
+    if response_length == "short":
+        prompt += "\nProvide SHORT response (3-4 paragraphs). Key concept and basic explanation with minimal examples.\n"
+    elif response_length == "medium":
+        prompt += "\nProvide MEDIUM response (2-3 paragraphs). Main concept, explanation, and one clear example.\n"
+    elif response_length == "very long":
+        prompt += "\nProvide VERY LONG response (5+ paragraphs). Comprehensive explanation, multiple examples, context, and deeper insights.\n"
+    else:
+        prompt += "\nProvide VERY LONG response (5+ paragraphs). Comprehensive explanation, multiple examples, context, and deeper insights.\n"
 
     return prompt.strip()
 
