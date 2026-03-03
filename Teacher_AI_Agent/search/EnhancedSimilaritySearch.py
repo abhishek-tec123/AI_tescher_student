@@ -10,7 +10,6 @@ import time
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from pymongo import MongoClient
-from pymongo.errors import ConnectionFailure
 from search.SimilaritySearch import (
     extract_core_question,
     embed_query,
@@ -22,9 +21,8 @@ from search.SimilaritySearch import (
     TOP_K,
     response_cache
 )
-from search.structured_response import compute_quality_scores
+from Teacher_AI_Agent.search.structured_response import compute_quality_scores
 from Teacher_AI_Agent.dbFun.shared_knowledge import shared_knowledge_manager
-
 # -----------------------------
 # Logging
 # -----------------------------
@@ -70,49 +68,7 @@ def _build_safe_out_of_scope_response(query: str, restriction_reason: str):
 # -----------------------------
 # Content relevance validation
 # -----------------------------
-def validate_content_relevance(query: str, chunk_text: str, min_keyword_matches: int = 2) -> bool:
-    """
-    Validates that retrieved chunk content is actually relevant to the query.
-    Prevents false positives by checking keyword presence and semantic relevance.
-    Slightly relaxed for very short, profile-style questions so that
-    teacher resume/profile chunks can be used when appropriate.
-    """
-    if not query or not chunk_text:
-        return False
-    
-    # Extract key terms from query (remove common words)
-    query_lower = query.lower()
-    query_words = [word.strip("?.,!;:()[]{}\"'") for word in query_lower.split() 
-                   if len(word) > 2 and word not in ['the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'with', 'by', 'is', 'are', 'was', 'were', 'what', 'how', 'when', 'where', 'why', 'tell', 'me', 'explain', 'describe']]
-    
-    chunk_lower = chunk_text.lower()
-    
-    # Count keyword matches
-    keyword_matches = 0
-    for word in query_words:
-        if word in chunk_lower:
-            keyword_matches += 1
-    
-    # Dynamically relax requirement for very short/profile-style queries
-    effective_min_matches = min_keyword_matches
-    if len(query_words) <= 3:
-        effective_min_matches = 1
-    
-    # Require minimum keyword matches
-    if keyword_matches < effective_min_matches:
-        logger.info(f"[ContentValidation] Rejected chunk: only {keyword_matches}/{len(query_words)} keywords matched (required {effective_min_matches})")
-        return False
-    
-    # Additional check: chunk should not be too generic
-    generic_phrases = ['this is a', 'this is an', 'it is a', 'it is an', 'here is', 'there is', 'the following', 'as follows']
-    for phrase in generic_phrases:
-        if chunk_lower.strip().startswith(phrase):
-            logger.info(f"[ContentValidation] Rejected chunk: starts with generic phrase '{phrase}'")
-            return False
-    
-    logger.info(f"[ContentValidation] Accepted chunk: {keyword_matches}/{len(query_words)} keywords matched (required {effective_min_matches})")
-    return True
-
+from Teacher_AI_Agent.search.SimilaritySearch import validate_content_relevance
 # -----------------------------
 # Async MongoDB Connection Pool
 # -----------------------------
