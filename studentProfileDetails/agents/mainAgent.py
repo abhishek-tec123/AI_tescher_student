@@ -31,7 +31,7 @@ def update_base_prompt(new_prompt: str):
 # 🎯 INTENT DETECTION
 # =====================================================
 
-def detect_intent_and_topic(query: str) -> dict:
+def detect_intent_and_topic(query: str, current_subject: str = None) -> dict:
     q = query.lower()
 
     if any(x in q for x in ["quiz", "test me", "start quiz"]):
@@ -42,11 +42,35 @@ def detect_intent_and_topic(query: str) -> dict:
         match = re.search(r"(?:learn|study)\s+(.*)", q)
         return {"intent": "STUDY_PLAN", "topic": match.group(1) if match else None}
 
-    if any(word in q for word in ["notes", "make notes", "summary", "revision"]):
-        return {
-            "intent": "NOTES",
-            "topic": extract_topic_from_sentence(query)
-        }
+    if any(word in q for word in ["notes", "make notes", "revision"]):
+        # Check if it's a generic request or specific topic request
+        if any(word in q for word in ["notes on", "make notes on", "revision on"]):
+            # Specific topic request - extract the topic
+            return {
+                "intent": "NOTES",
+                "topic": extract_topic_from_sentence(query)
+            }
+        else:
+            # Generic request - use current subject
+            return {
+                "intent": "NOTES",
+                "topic": current_subject or "General"
+            }
+
+    if any(word in q for word in ["summary", "summarize", "give summary", "what i have learned"]):
+        # Check if it's a generic summary request or specific topic request
+        if any(word in q for word in ["summary of", "give summary of"]) or re.search(r"summarize\s+\w+", q):
+            # Specific topic request - extract topic
+            return {
+                "intent": "SUMMARY",
+                "topic": extract_topic_from_sentence(query)
+            }
+        else:
+            # Generic request - use current subject
+            return {
+                "intent": "SUMMARY",
+                "topic": current_subject or "General"
+            }
 
     return {"intent": "CHAT", "query": q, "topic": None}
 

@@ -4,7 +4,7 @@ from studentProfileDetails.quizHelper import create_quiz_session, get_current_qu
 from studentProfileDetails.intent_handlers import handle_chat_intent, handle_study_plan_intent
 from studentProfileDetails.agents.mainAgent import detect_intent_and_topic
 from studentProfileDetails.agents.quiz_generator import generate_quiz_from_history
-from studentProfileDetails.agents.notes_agent import generate_notes
+from studentProfileDetails.agents.notes_agent import generate_notes, generate_summary
 from studentProfileDetails.summrizeStdConv import update_running_summary
 from studentProfileDetails.utils.agent_utils import get_dynamic_agent_id_for_subject
 import time
@@ -134,7 +134,7 @@ def queryRouter(
         )
     )
 
-    intent_result = detect_intent_and_topic(payload.query)
+    intent_result = detect_intent_and_topic(payload.query, payload.subject)
     intent = intent_result["intent"]
     topic = intent_result.get("topic")
 
@@ -319,11 +319,11 @@ def queryRouter(
     # NOTES (🚫 no summary update)
     # =============================
     elif intent == "NOTES":
-        # Fetch stored conversation history from MongoDB
+        # Fetch ALL stored conversation history from MongoDB (no limit)
         stored_history = student_manager.get_chat_history_by_agent(
             student_id=payload.student_id,
             subject=payload.subject,
-            limit=20  # Get all available history for better notes generation
+            limit=None  # Get all available history for better notes generation
         )
         
         # Combine session context with stored history
@@ -380,6 +380,75 @@ def queryRouter(
         session_context.append({
             "query": payload.query,
             "response": notes
+        })
+
+        context_store[payload.student_id] = session_context[-10:]
+
+    # =============================
+    # SUMMARY (🚫 no summary update)
+    # =============================
+    elif intent == "SUMMARY":
+        # Fetch ALL stored conversation history from MongoDB (no limit)
+        stored_history = student_manager.get_chat_history_by_agent(
+            student_id=payload.student_id,
+            subject=payload.subject,
+            limit=None  # Get all available history for comprehensive summary
+        )
+        
+        # Combine session context with stored history
+        # Convert stored history to the format expected by summary generator
+        formatted_stored_history = []
+        for item in stored_history:
+            formatted_stored_history.append({
+                "query": item.get("query", ""),
+                "response": item.get("response", ""),
+                "evolution": item.get("evaluation", {})
+            })
+        
+        # Combine session context (most recent) with stored history
+        combined_history = formatted_stored_history + session_context
+        
+        summary = generate_summary(
+            topic=topic,
+            chat_history=combined_history,
+            student_profile=profile
+        )
+
+        response = {
+            "topic": topic,
+            "summary": summary,
+            "metadata": {
+                "history_used": len(combined_history),
+                "stored_history": len(formatted_stored_history),
+                "session_context": len(session_context)
+            }
+        }
+
+        # 🚀 Start background conversation storage for summary
+        def store_summary_background():
+            try:
+                student_manager.add_conversation(
+                    student_id=payload.student_id,
+                    subject=payload.subject,
+                    query=payload.query,
+                    response=summary,  # Store actual summary content
+                    additional_data={
+                        "summary_action": "generated",
+                        "topic": topic,
+                        "history_sources": len(combined_history)
+                    }
+                )
+                print(f"🔄 Background summary storage completed for: {payload.student_id}")
+            except Exception as e:
+                print(f"❌ Background summary storage failed: {e}")
+        
+        summary_thread = threading.Thread(target=store_summary_background, daemon=True)
+        summary_thread.start()
+        print(f"🚀 Summary storage started in background for faster response")
+
+        session_context.append({
+            "query": payload.query,
+            "response": summary
         })
 
         context_store[payload.student_id] = session_context[-10:]
