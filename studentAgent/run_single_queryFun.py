@@ -12,6 +12,7 @@ def run_query(
     db_name: str,
     collection_name: str,
     student_profile: dict = None,
+    subject_agent_id: str = None,  # for shared knowledge
     top_k: int = 10
 ):
     """
@@ -28,6 +29,7 @@ def run_query(
             db_name=db_name,
             collection_name=collection_name,
             student_profile=student_profile,
+            subject_agent_id=subject_agent_id,  # Pass for shared knowledge
             top_k=top_k
         )
 

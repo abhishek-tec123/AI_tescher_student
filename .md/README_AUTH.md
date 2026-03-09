@@ -295,3 +295,152 @@ For development, you can check token contents using JWT.io or the `/api/v1/auth/
 4. Update client applications to use authentication
 5. Implement rate limiting for production
 6. Add password reset functionality (if needed)
+
+
+systemed file +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+========================================
+AITEACHER FastAPI Systemd Setup Guide
+========================================
+
+Project Path:
+    /home/ubuntu/AI_Teacher
+
+Virtual Environment:
+    /home/ubuntu/AI_Teacher/.AITEACHERvenv
+
+Server Command:
+    python -m uvicorn app:app --host 0.0.0.0 --port 8000
+
+
+========================================
+1) CREATE SYSTEMD SERVICE FILE
+========================================
+
+sudo nano /etc/systemd/system/AITEACHER.service
+
+
+Paste this inside:
+
+------------------------------------------------
+[Unit]
+Description=AI Teacher FastAPI Server
+After=network.target redis.service
+
+[Service]
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/AI_Teacher
+EnvironmentFile=/home/ubuntu/AI_Teacher/.env
+ExecStart=/home/ubuntu/AI_Teacher/.AITEACHERvenv/bin/python -m uvicorn app:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+------------------------------------------------
+
+Save:
+CTRL+O → Enter → CTRL+X
+
+
+========================================
+2) RELOAD SYSTEMD
+========================================
+
+sudo systemctl daemon-reload
+
+
+========================================
+3) ENABLE SERVICE (AUTO START ON BOOT)
+========================================
+
+sudo systemctl enable AITEACHER
+
+
+========================================
+4) START SERVICE
+========================================
+
+sudo systemctl start AITEACHER
+
+
+========================================
+5) CHECK STATUS
+========================================
+
+sudo systemctl status AITEACHER
+
+
+========================================
+6) VIEW LIVE LOGS
+========================================
+
+journalctl -u AITEACHER -f
+
+
+========================================
+7) RESTART SERVICE (AFTER CODE CHANGES)
+========================================
+
+sudo systemctl restart AITEACHER
+
+
+========================================
+8) STOP SERVICE
+========================================
+
+sudo systemctl stop AITEACHER
+
+
+========================================
+9) DISABLE AUTO START
+========================================
+
+sudo systemctl disable AITEACHER
+
+
+========================================
+10) DEBUG IF SERVICE FAILS
+========================================
+
+journalctl -xeu AITEACHER
+
+
+========================================
+OPTIONAL: CHANGE PORT TO 3018
+========================================
+
+sudo nano /etc/systemd/system/AITEACHER.service
+
+Change:
+    --port 8000
+
+To:
+    --port 3018
+
+Then run:
+
+sudo systemctl daemon-reload
+sudo systemctl restart AITEACHER
+
+
+========================================
+IMPORTANT (AWS EC2)
+========================================
+
+Open Security Group Inbound Rule:
+
+Type: Custom TCP
+Port: 8000   (or 3018 if changed)
+Source: 0.0.0.0/0
+
+Then access:
+
+http://YOUR_PUBLIC_IP:8000/docs
+
+
+========================================
+END
+========================================

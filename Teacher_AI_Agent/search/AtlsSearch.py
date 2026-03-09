@@ -10,7 +10,11 @@ from pymongo.errors import OperationFailure
 def embed_query(query, embedding_model):
     return embedding_model.embed_query(query)
 
-def find_similar_chunks_in_memory(query_embedding, collection, top_k=3):
+def find_similar_chunks_in_memory_for_query_send_to_llm(query_embedding, collection, top_k=3, similarity_threshold=0.2):
+    """Enhanced version with similarity threshold for query send to LLM."""
+    return find_similar_chunks_in_memory(query_embedding, collection, top_k, similarity_threshold)
+
+def find_similar_chunks_in_memory(query_embedding, collection, top_k=3, similarity_threshold=0.2):
     docs = list(collection.find({}, {"embedding": 1, "chunk_text": 1, "unique_id": 1}))
     def cosine_similarity(a, b):
         a = np.array(a)
@@ -24,8 +28,13 @@ def find_similar_chunks_in_memory(query_embedding, collection, top_k=3):
         }
         for doc in docs
     ]
-    scored.sort(key=lambda x: x["score"], reverse=True)
-    return scored[:top_k]
+    
+    # Apply similarity threshold filter
+    filtered_scored = [item for item in scored if item["score"] >= similarity_threshold]
+    
+    # Sort by score and return top_k
+    filtered_scored.sort(key=lambda x: x["score"], reverse=True)
+    return filtered_scored[:top_k]
 
 def find_similar_chunks_atlas_vector_search(query_embedding, collection, num_candidates=100, limit=3, index_name="vector_index"):
     pipeline = [

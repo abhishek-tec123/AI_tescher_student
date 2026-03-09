@@ -1,4 +1,5 @@
 import re
+import threading
 from studentProfileDetails.learning_progress import (
     normalize_student_preference,
     update_progress_and_regression,
@@ -7,6 +8,7 @@ from studentProfileDetails.agents.mainAgent import diagnosis_chat
 from studentProfileDetails.agents.quiz_generator import generate_quiz_from_history
 from studentProfileDetails.agents.studyPlane import generate_study_plan_with_subtopics
 from studentProfileDetails.agents.evaluation_agent import evaluate_response
+from studentProfileDetails.agents.vector_performance_updater import update_vector_performance
 from studentProfileDetails.utils.agent_utils import get_dynamic_agent_id_for_subject  # ✅ Import dynamic agent ID mapping
 from studentProfileDetails.handle_general_cht import is_greeting, handle_greeting_chat, handle_general_chat_llm, is_general_chat
 # -------------------------------------------------
@@ -43,26 +45,17 @@ def handle_chat_intent(
         )
 
     # -----------------------------------------
-    # Update progression BEFORE academic response
+    # Academic Tutor Flow (Vector DB + Agent) - PRIORITY #1
     # -----------------------------------------
-    profile = update_progress_and_regression(
-        student_manager,
-        payload.student_id,
-        payload.subject,
-        profile,
-    )
-    print("Student Profile : ", profile)
-    # -----------------------------------------
+    # Get subject_agent_id for agent introduction
+    subject_agent_id = get_dynamic_agent_id_for_subject(student_manager, payload.student_id, payload.subject)
+    
     # Prepare academic history
-    # -----------------------------------------
     history_context = [
         f"Q: {turn['query']}\nA: {turn['response']}"
         for turn in context
     ]
-
-    # -----------------------------------------
-    # Academic Tutor Flow (Vector DB + Agent)
-    # -----------------------------------------
+    
     chat = diagnosis_chat(
         student_agent,
         payload.query,
@@ -70,6 +63,7 @@ def handle_chat_intent(
         payload.subject,
         profile,
         context=history_context,
+        subject_agent_id=subject_agent_id
     )
 
     response = chat["response"]
@@ -77,104 +71,141 @@ def handle_chat_intent(
     rl_metadata = chat.get("rl_metadata", {})
 
     # -----------------------------------------
-    # Evaluate academic response
+    # Synchronous processing for conversation ID 
     # -----------------------------------------
-    evaluation = evaluate_response(
-        query=payload.query,
-        response=response,
-        subject=payload.subject,
-        profile=profile,
-        confusion_type=confusion_type,
-    )
-
-    # -----------------------------------------
-    # Persist profile
-    # -----------------------------------------
-    student_manager.update_subject_preference(
-        payload.student_id,
-        payload.subject,
-        {
-            "confusion_counter": profile["confusion_counter"],
-            "common_mistakes": profile["common_mistakes"],
-            "learning_style": profile["learning_style"],
-            "level": profile["level"],
-            "tone": profile["tone"],
-            "response_length": profile["response_length"],
-            "include_example": profile["include_example"],
-        },
-    )
-
-    # -----------------------------------------
-    # Store conversation (moved to background for faster response)
-    # -----------------------------------------
-    def store_conversation_background():
-        try:
-            agent_id = get_dynamic_agent_id_for_subject(student_manager, payload.student_id, payload.subject)
-            if agent_id:
-                conversation_id = student_manager.add_conversation(
-                    student_id=payload.student_id,
-                    subject=payload.subject,
-                    query=payload.query,
-                    response=response,
-                    confusion_type=confusion_type,
-                    evaluation=evaluation,
-                    quality_scores=evaluation,  # ✅ Add quality_scores for performance tracking
-                    feedback=evaluation.get("feedback", "like") if isinstance(evaluation, dict) else "like",  # ✅ Add feedback
-                    additional_data={
-                        "rl_metadata": rl_metadata,
-                        "subject_agent_id": agent_id  # ✅ Use dynamic agent ID mapping
-                    }
-                )
-            else:
-                conversation_id = student_manager.add_conversation(
-                    student_id=payload.student_id,
-                    subject=payload.subject,
-                    query=payload.query,
-                    response=response,
-                    confusion_type=confusion_type,
-                    evaluation=evaluation,
-                    additional_data={"rl_metadata": rl_metadata}
-                )
-                print(f"⚠️ Agent not found for subject '{payload.subject}'. Performance tracking skipped.")
-            
-            print(f"🔄 Background conversation storage completed for: {payload.student_id}")
-        except Exception as e:
-            print(f"❌ Background conversation storage failed: {e}")
     
-    # Start background storage for faster response
-    import threading
-    background_thread = threading.Thread(target=store_conversation_background, daemon=True)
-    background_thread.start()
-    print(f"🚀 Conversation storage started in background for faster response")
-    
-    # Set conversation_id to None for now (will be generated in background)
-    conversation_id = None
-
-    # -----------------------------------------
-    # Update progression AFTER conversation
-    # -----------------------------------------
-    profile = update_progress_and_regression(
+    # Update progression BEFORE academic response
+    updated_profile = update_progress_and_regression(
         student_manager,
         payload.student_id,
         payload.subject,
         profile,
     )
-
-    # -----------------------------------------
-    # Reload normalized profile
-    # -----------------------------------------
-    profile = normalize_student_preference(
-        student_manager.get_or_create_subject_preference(
-            payload.student_id, payload.subject
+    print("📊 Profile update completed")
+    
+    # Store conversation synchronously to get conversation_id
+    agent_id = get_dynamic_agent_id_for_subject(student_manager, payload.student_id, payload.subject)
+    if agent_id:
+        conversation_id = student_manager.add_conversation(
+            student_id=payload.student_id,
+            subject=payload.subject,
+            query=payload.query,
+            response=response,
+            confusion_type=confusion_type,
+            additional_data={
+                "rl_metadata": rl_metadata,
+                "subject_agent_id": agent_id  # Use dynamic agent ID mapping
+            }
         )
-    )
+    else:
+        conversation_id = student_manager.add_conversation(
+            student_id=payload.student_id,
+            subject=payload.subject,
+            query=payload.query,
+            response=response,
+            confusion_type=confusion_type,
+            additional_data={"rl_metadata": rl_metadata}
+        )
+        print(f"⚠️ Agent not found for subject '{payload.subject}'. Performance tracking skipped.")
+    
+    print(f"� Conversation storage completed: {conversation_id}")
 
-    return {
+    # -----------------------------------------
+    # Return immediate response with actual values
+    # -----------------------------------------
+    # Fetch current summary for immediate response
+    try:
+        context_summary = student_manager.get_subject_summary(payload.student_id, payload.subject)
+    except Exception as e:
+        print(f"⚠️ Failed to fetch existing summary in handle_chat_intent: {e}")
+        context_summary = None
+    
+    immediate_result = {
         "response": response,
-        "profile": profile,
-        "evaluation": evaluation,
-        "conversation_id": str(conversation_id),
+        "profile": updated_profile,  # Return updated profile
+        "evaluation": {"status": "processing"},  # Placeholder evaluation
+        "conversation_id": str(conversation_id),  # Return actual conversation ID
+        "context_summary": context_summary,  # Add context summary to response
     }
+
+    # -----------------------------------------
+    # Background processing for non-critical operations only
+    # -----------------------------------------
+    def background_processing():
+        try:
+            # Evaluate academic response (moved to background)
+            evaluation = evaluate_response(
+                query=payload.query,
+                response=response,
+                subject=payload.subject,
+                profile=updated_profile,
+            )
+            print("🧠 Evaluation completed")
+            
+            # Performance tracking (moved to background)
+            if agent_id:
+                performance_update_result = update_vector_performance(
+                    subject_agent_id=agent_id,
+                    quality_scores=evaluation,
+                    feedback=evaluation.get("feedback", "like") if isinstance(evaluation, dict) else "like",
+                    confusion_type=confusion_type,
+                    student_id=payload.student_id
+                )
+                print(f"🔥 PERFORMANCE UPDATE TRIGGERED")
+                print(f"   - Agent ID: {agent_id}")
+                print(f"   - Quality Scores: {evaluation}")
+                print(f"   - Student ID: {payload.student_id}")
+                print(f"   - Performance Update Result: {performance_update_result}")
+            
+            # Update conversation summary in background
+            from studentProfileDetails.summrizeStdConv import update_running_summary
+            new_entry = {
+                "query": payload.query,
+                "response": response,
+                "evolution": evaluation
+            }
+            update_running_summary(
+                student_id=payload.student_id,
+                subject=payload.subject,
+                new_entry=new_entry,
+                student_manager=student_manager
+            )
+            print("📝 Background summary update completed")
+            
+            # Update student profile with new preferences (moved to background)
+            student_manager.update_subject_preference(
+                student_id=payload.student_id,
+                subject=payload.subject,
+                preference={
+                    "learning_style": updated_profile["learning_style"],
+                    "level": updated_profile["level"],
+                    "tone": updated_profile["tone"],
+                    "response_length": updated_profile["response_length"],
+                    "include_example": updated_profile["include_example"],
+                },
+            )
+            print("💾 Background profile persistence completed")
+            
+            # Second progression update (non-critical)
+            final_profile = update_progress_and_regression(
+                student_manager,
+                payload.student_id,
+                payload.subject,
+                updated_profile,
+            )
+            print("📈 Background final progression update completed")
+            
+            print("✅ All background processing completed successfully")
+            
+        except Exception as e:
+            print(f"❌ Background processing failed: {e}")
+    
+    # Start background processing for non-critical operations
+    background_thread = threading.Thread(target=background_processing, daemon=True)
+    background_thread.start()
+    print(f"🚀 Non-critical operations moved to background")
+    
+    return immediate_result
 
 
 # -------------------------------------------------

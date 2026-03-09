@@ -114,11 +114,16 @@ def create_vector_and_store_in_atlas(
     for entry in vector:
         entry["subject_agent_id"] = subject_agent_id
     
-    # ✅ Attach agent metadata safely
+    # ✅ Attach agent metadata safely with global settings defaults
     if agent_metadata:
-        logger.info(f"Attaching agent metadata: {agent_metadata}")
+        # Ensure global settings are properly set with defaults
+        processed_metadata = agent_metadata.copy()
+        processed_metadata.setdefault("global_prompt_enabled", False)
+        processed_metadata.setdefault("global_rag_enabled", False)
+        
+        logger.info(f"Attaching agent metadata with global settings: {processed_metadata}")
         for entry in vector:
-            entry["agent_metadata"] = agent_metadata
+            entry["agent_metadata"] = processed_metadata
     
     # ✅ NEW: Add performance tracking key to each entry
     performance_data = {
@@ -226,6 +231,25 @@ def create_vector_and_store_in_atlas(
                 
         except Exception as e:
             logger.error(f"❌ Error creating agent performance summary: {e}")
+
+    # Log activity for new agent creation
+    try:
+        from studentProfileDetails.activity_tracker import log_agent_created
+        
+        agent_name = agent_metadata.get("agent_name") if agent_metadata else collection_name
+        if not agent_name:
+            agent_name = collection_name
+            
+        log_agent_created(
+            agent_id=subject_agent_id,
+            agent_name=agent_name,
+            subject=collection_name,
+            class_name=db_name
+        )
+        logger.info(f"✅ Logged agent creation activity for {subject_agent_id}")
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to log agent creation activity: {e}")
 
     return summary
 

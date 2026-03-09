@@ -1,6 +1,8 @@
 import re
 from studentProfileDetails.generate_response_with_groq import generate_response_with_groq
 from studentProfileDetails.utils.agent_utils import get_dynamic_agent_id_for_subject  # ✅ Import dynamic agent ID mapping
+from studentProfileDetails.prompt_templates import detect_formal_communication  # ✅ Import formal detection from modular templates
+from studentProfileDetails.agents.mainAgent import get_agent_metadata  # ✅ Import agent metadata from mainAgent
 
 def is_greeting(query: str) -> bool:
     q = query.lower().strip()
@@ -51,16 +53,54 @@ def build_context_text(context):
 # Greeting Handler
 # -------------------------------------------------
 def handle_greeting_chat(*, payload, student_manager, profile):
-    response = generate_response_with_groq(
-        query=payload.query,
-        system_prompt=(
+    # Get agent ID for potential introduction
+    agent_id = get_dynamic_agent_id_for_subject(student_manager, payload.student_id, payload.subject)
+    print(f"🔍 DEBUG: agent_id for subject '{payload.subject}': {agent_id}")
+    
+    # Check if this is a formal greeting
+    is_formal = detect_formal_communication(payload.query)
+    print(f"🔍 DEBUG: is_formal greeting '{payload.query}': {is_formal}")
+    
+    # Get agent metadata for formal greetings
+    agent_intro = ""
+    if is_formal and agent_id:
+        print(f"🔍 DEBUG: Attempting to get metadata for agent_id: {agent_id}")
+        agent_metadata = get_agent_metadata(agent_id)
+        print(f"🔍 DEBUG: agent_metadata retrieved: {agent_metadata}")
+        if agent_metadata:
+            agent_name = agent_metadata.get("agent_name", "")
+            description = agent_metadata.get("description", "")
+            print(f"🔍 DEBUG: agent_name: '{agent_name}', description: '{description}'")
+            if agent_name:
+                agent_intro = f" I'm {agent_name}. {description}"
+                print(f"🔍 DEBUG: Generated agent_intro: '{agent_intro}'")
+    
+    # Build response with potential introduction
+    if is_formal and agent_intro:
+        # Formal greeting with introduction - use agent identity
+        system_prompt = (
+            "You are a teacher assistant.\n"
+            f"Your identity: {agent_intro.strip()}\n"
+            "Respond warmly to greetings and introduce yourself using your identity.\n"
+            "Start your response with a warm greeting followed by your introduction.\n"
+            "Example: 'Hello! I'm Diljit manjhi sir. This is diljit here of home science teacher of class 12th. How can I help you today?'\n"
+            "Keep it brief and welcoming."
+        )
+        print(f"🔍 DEBUG: Using formal greeting with intro")
+    else:
+        # Simple greeting
+        system_prompt = (
             "You are a friendly student assistant.\n"
             "Respond warmly and briefly to greetings.\n"
-            "Do not ask academic questions unless the student does."
-        ),
+            "Do not ask academic questions unless student does."
+        )
+        print(f"🔍 DEBUG: Using simple greeting (formal: {is_formal}, intro: '{agent_intro}')")
+    
+    response = generate_response_with_groq(
+        query=payload.query,
+        system_prompt=system_prompt,
     )
 
-    agent_id = get_dynamic_agent_id_for_subject(student_manager, payload.student_id, payload.subject)
     if agent_id:
         conversation_id = student_manager.add_conversation(
             student_id=payload.student_id,

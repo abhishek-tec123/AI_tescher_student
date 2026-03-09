@@ -5,15 +5,21 @@ from datetime import datetime
 import os
 
 from routes.startup import startup_event
-from routes import vectors, admin, student, auth, agent_performance, all_agents_performance
+from routes import vectors, admin, student, auth, agent_performance, all_agents_performance, activity
 from Teacher_AI_Agent.dbFun.createVector import create_vectors_service
 app = FastAPI(title="Student Learning API")
 
 app.state.create_vectors_service = create_vectors_service
 
+origins = [
+    "https://tecorb.in",       # production
+    "http://localhost:8080",   # local dev
+    "http://127.0.0.1:8080"
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -73,6 +79,13 @@ api_v1_router.include_router(
     all_agents_performance.router, 
     prefix="/performance", 
     tags=["All Agents Performance"]
+)
+
+# Activity tracking routes (auth required)
+api_v1_router.include_router(
+    activity.router, 
+    prefix="/activity", 
+    tags=["Activity Tracking"]
 )
 
 app.include_router(api_v1_router)

@@ -88,38 +88,47 @@ def update_progress_and_regression(student_manager, student_id, subject, profile
             level = "basic"
 
     # ------------------
-    # RESPONSE_LENGTH (updated logic: quiz performance has absolute priority over confusion)
+    # RESPONSE_LENGTH (simplified logic: 3-level system - short, medium, very long)
     # ------------------
-    response_length = profile.get("response_length", "long")
+    response_length = profile.get("response_length", "very long")  # Default to very long for detailed responses
     degradation_include_example = False
 
-    # PERFECT PERFORMANCE: Decrease response length (ABSOLUTE PRIORITY - overrides confusion)
+    # Define response length hierarchy for progression
+    response_hierarchy = ["short", "medium", "very long"]
+    
+    # PERFECT PERFORMANCE: Maintain or enhance detailed responses
     if consecutive_perfect_scores >= 2:
-        if response_length == "very long":
-            response_length = "long"
-        elif response_length == "long":
-            response_length = "short"
-        print(f"📈 Perfect performance: response_length reduced to {response_length}")
-    # POOR PERFORMANCE: Increase response length (ABSOLUTE PRIORITY - overrides confusion)
-    elif consecutive_low_scores >= 2:
-        if response_length == "short":
-            response_length = "long"
-        elif response_length == "long":
+        current_index = response_hierarchy.index(response_length) if response_length in response_hierarchy else 2
+        # For good performers, maintain current level or upgrade
+        if current_index >= 2:  # very long - keep at maximum
             response_length = "very long"
-        print(f"📉 Poor performance: response_length increased to {response_length}")
+        elif current_index >= 1:  # medium - upgrade to very long
+            response_length = "very long"
+        else:  # short - upgrade to medium
+            response_length = "medium"
+        print(f"📈 Perfect performance: maintaining detailed responses ({response_length})")
+    
+    # POOR PERFORMANCE: Ensure maximum detail for struggling students
+    elif consecutive_low_scores >= 2:
+        response_length = "very long"  # Maximum detail for struggling students
+        print(f"📉 Poor performance: response_length set to {response_length} for better support")
         degradation_include_example = True
-    # REGULAR STREAK-BASED LOGIC (only if no quiz performance)
+    
+    # REGULAR STREAK-BASED LOGIC (progressive enhancement)
     elif correct_streak >= 3 and not degradation_triggered:
-        if response_length == "very long":
-            response_length = "long"
-        elif response_length == "long":
-            response_length = "short"
-        print(f"📈 Good performance: response_length reduced to {response_length}")
-    # CONFUSION-BASED DEGRADATION (only if no quiz performance)
+        current_index = response_hierarchy.index(response_length) if response_length in response_hierarchy else 2
+        # Progress to next level if not at maximum
+        if current_index < 2:
+            response_length = response_hierarchy[current_index + 1]
+        print(f"📈 Good performance: enhanced to {response_length}")
+    
+    # CONFUSION-BASED DEGRADATION (increase detail for clarity)
     elif degradation_triggered or wrong_streak >= 3:
-        if response_length == "short":
-            response_length = "long"
-        elif response_length == "long":
+        current_index = response_hierarchy.index(response_length) if response_length in response_hierarchy else 2
+        # Increase detail level for confused students
+        if current_index < 2:
+            response_length = response_hierarchy[min(current_index + 1, 2)]  # Jump to next level for clarity
+        else:
             response_length = "very long"
         print(f"📉 Confusion-based degradation: response_length increased to {response_length}")
         degradation_include_example = True
