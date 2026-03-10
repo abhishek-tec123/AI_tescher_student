@@ -12,6 +12,7 @@ from routes.auth import auth_router
 from routes.performance import performance_router
 from routes.activity import activity_router
 from routes.core import core_router
+from routes.topics import topics_router
 from Teacher_AI_Agent.dbFun.createVector import create_vectors_service
 app = FastAPI(title="Student Learning API")
 
@@ -92,6 +93,13 @@ api_v1_router.include_router(
     core_router, 
     prefix="/core", 
     tags=["Core"]
+)
+
+# Topics routes (auth required)
+api_v1_router.include_router(
+    topics_router, 
+    prefix="/topics", 
+    tags=["Topics"]
 )
 
 app.include_router(api_v1_router)

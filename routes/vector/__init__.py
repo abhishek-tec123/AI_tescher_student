@@ -20,6 +20,6 @@ vector_router.include_router(status_router)
 vector_router.include_router(management_router)
 
 # Debug: Print router routes
-print(f"Vector router routes: {[route.path for route in vector_router.routes]}")
+# print(f"Vector router routes: {[route.path for route in vector_router.routes]}")
 
 __all__ = ["vector_router"]
