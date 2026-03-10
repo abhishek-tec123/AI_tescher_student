@@ -11,6 +11,7 @@ from studentProfileDetails.agents.evaluation_agent import evaluate_response
 from studentProfileDetails.agents.vector_performance_updater import update_vector_performance
 from studentProfileDetails.utils.agent_utils import get_dynamic_agent_id_for_subject  # ✅ Import dynamic agent ID mapping
 from studentProfileDetails.handle_general_cht import is_greeting, handle_greeting_chat, handle_general_chat_llm, is_general_chat
+from studentProfileDetails.dbutils import ConversationManager, PreferenceManager
 # -------------------------------------------------
 # Main Chat Intent Handler
 # -------------------------------------------------
@@ -22,6 +23,7 @@ def handle_chat_intent(
     payload,
     profile,
     context,
+    preference_manager,  # Add preference_manager parameter
 ):
     # -----------------------------------------
     # Greeting
@@ -80,42 +82,47 @@ def handle_chat_intent(
         payload.student_id,
         payload.subject,
         profile,
+        preference_manager  # Pass the preference_manager instance
     )
     print("📊 Profile update completed")
     
-    # Store conversation synchronously to get conversation_id
+    # -----------------------------------------
+    # Store conversation with complete data (response + rl_metadata)
+    # -----------------------------------------
     agent_id = get_dynamic_agent_id_for_subject(student_manager, payload.student_id, payload.subject)
+    conversation_manager = ConversationManager()  # Initialize here for use in conversation storage
+    
+    # Prepare additional data including rl_metadata
+    additional_data = {}
     if agent_id:
-        conversation_id = student_manager.add_conversation(
-            student_id=payload.student_id,
-            subject=payload.subject,
-            query=payload.query,
-            response=response,
-            confusion_type=confusion_type,
-            additional_data={
-                "rl_metadata": rl_metadata,
-                "subject_agent_id": agent_id  # Use dynamic agent ID mapping
-            }
-        )
+        additional_data["subject_agent_id"] = agent_id
+    if rl_metadata:
+        additional_data["rl_metadata"] = rl_metadata
+    
+    conversation_id = conversation_manager.add_conversation(
+        student_id=payload.student_id,
+        subject=payload.subject,
+        query=payload.query,
+        response=response,  # Store actual response
+        feedback="neutral",  # Default feedback
+        confusion_type=confusion_type or "NO_CONFUSION",
+        evaluation=None,
+        additional_data=additional_data
+    )
+    
+    if agent_id:
+        print(f"📝 Conversation stored with ID: {conversation_id} (agent: {agent_id})")
     else:
-        conversation_id = student_manager.add_conversation(
-            student_id=payload.student_id,
-            subject=payload.subject,
-            query=payload.query,
-            response=response,
-            confusion_type=confusion_type,
-            additional_data={"rl_metadata": rl_metadata}
-        )
         print(f"⚠️ Agent not found for subject '{payload.subject}'. Performance tracking skipped.")
     
-    print(f"� Conversation storage completed: {conversation_id}")
+    print(f"✅ Conversation storage completed: {conversation_id}")
 
     # -----------------------------------------
     # Return immediate response with actual values
     # -----------------------------------------
     # Fetch current summary for immediate response
     try:
-        context_summary = student_manager.get_subject_summary(payload.student_id, payload.subject)
+        context_summary = conversation_manager.get_subject_summary(payload.student_id, payload.subject)
     except Exception as e:
         print(f"⚠️ Failed to fetch existing summary in handle_chat_intent: {e}")
         context_summary = None
@@ -168,23 +175,32 @@ def handle_chat_intent(
                 student_id=payload.student_id,
                 subject=payload.subject,
                 new_entry=new_entry,
-                student_manager=student_manager
+                student_manager=student_manager,
+                conversation_manager=conversation_manager  # Add missing parameter
             )
             print("📝 Background summary update completed")
             
             # Update student profile with new preferences (moved to background)
-            student_manager.update_subject_preference(
-                student_id=payload.student_id,
-                subject=payload.subject,
-                preference={
-                    "learning_style": updated_profile["learning_style"],
-                    "level": updated_profile["level"],
-                    "tone": updated_profile["tone"],
-                    "response_length": updated_profile["response_length"],
-                    "include_example": updated_profile["include_example"],
-                },
-            )
-            print("💾 Background profile persistence completed")
+            try:
+                # Use existing preference_manager or create new one if needed (thread safety)
+                pm = preference_manager if preference_manager is not None else PreferenceManager()
+                
+                pm.update_subject_preference(
+                    student_id=payload.student_id,
+                    subject=payload.subject,
+                    updates={
+                        "learning_style": updated_profile["learning_style"],
+                        "level": updated_profile["level"],
+                        "tone": updated_profile["tone"],
+                        "response_length": updated_profile["response_length"],
+                        "include_example": updated_profile["include_example"],
+                    },
+                )
+                print("💾 Background profile persistence completed")
+            except Exception as e:
+                print(f"❌ Background profile persistence failed: {e}")
+                import traceback
+                traceback.print_exc()
             
             # Second progression update (non-critical)
             final_profile = update_progress_and_regression(
@@ -192,6 +208,7 @@ def handle_chat_intent(
                 payload.student_id,
                 payload.subject,
                 updated_profile,
+                preference_manager=pm,
             )
             print("📈 Background final progression update completed")
             
@@ -213,7 +230,9 @@ def handle_chat_intent(
 # -------------------------------------------------
 
 def handle_quiz_intent(*, student_manager, payload, topic):
-    history = student_manager.get_conversation_history(
+    # Use ConversationManager for conversation history
+    conversation_manager = ConversationManager()
+    history = conversation_manager.get_conversation_history(
         payload.student_id,
         payload.subject,
         limit=20,

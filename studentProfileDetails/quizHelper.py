@@ -7,6 +7,7 @@ quiz_sessions: dict[str, dict] = {}
 try:
     from studentProfileDetails.summrizeStdConv import update_running_summary
     from studentProfileDetails.learning_progress import update_progress_and_regression
+    from studentProfileDetails.dbutils import PreferenceManager
 except ImportError:
     print("Warning: Quiz summarization not available - missing dependencies")
     update_running_summary = None
@@ -41,7 +42,7 @@ def get_current_question(student_id: str):
         "answer": q["answer"]
     }
 
-def submit_quiz_answer(student_id: str, user_input: str, student_manager=None):
+def submit_quiz_answer(student_id: str, user_input: str, student_manager=None, preference_manager=None):
     session = quiz_sessions.get(student_id)
     if not session:
         return {"error": "No active quiz"}
@@ -78,18 +79,26 @@ def submit_quiz_answer(student_id: str, user_input: str, student_manager=None):
             question_text = f"Q{idx + 1}: {q['question']}\nOptions: A) {q['options'][0]}, B) {q['options'][1]}, C) {q['options'][2]}, D) {q['options'][3]}"
             answer_text = f"Your answer: {choice} ({selected})\nCorrect answer: {correct}\n{'✅ Correct!' if is_correct else '❌ Incorrect!'}"
             
-            student_manager.add_conversation(
+            # Use ConversationManager for adding conversations
+            conversation_manager = ConversationManager()
+            
+            agent_id = get_dynamic_agent_id_for_subject(student_manager, student_id, actual_subject)
+            additional_data = {
+                "quiz_action": "question_answered",
+                "question_number": idx + 1,
+                "is_correct": is_correct,
+                "selected_answer": choice,
+                "correct_answer": correct
+            }
+            if agent_id:
+                additional_data["subject_agent_id"] = agent_id
+                
+            conversation_id = conversation_manager.add_conversation(
                 student_id=student_id,
                 subject=actual_subject,
                 query=question_text,
                 response=answer_text,
-                additional_data={
-                    "quiz_action": "question_answered",
-                    "question_number": idx + 1,
-                    "is_correct": is_correct,
-                    "selected_answer": choice,
-                    "correct_answer": correct
-                }
+                additional_data=additional_data
             )
         except Exception as e:
             print(f"Failed to store quiz Q&A: {e}")
@@ -124,7 +133,7 @@ def get_final_quiz_result(student_id: str):
 
 from fastapi.responses import JSONResponse
 
-def handle_quiz_mode(student_id: str, query: str, student_manager=None):
+def handle_quiz_mode(student_id: str, query: str, student_manager=None, preference_manager=None):
     """
     Handles quiz flow if the student is currently in quiz mode.
     Returns a JSONResponse if quiz mode is active, otherwise None.
@@ -167,7 +176,7 @@ def handle_quiz_mode(student_id: str, query: str, student_manager=None):
         })
 
     # Submit answer
-    result = submit_quiz_answer(student_id, normalized_query, student_manager)
+    result = submit_quiz_answer(student_id, normalized_query, student_manager, preference_manager)
     
     # Debug quiz state
     debug_quiz_state(student_id)
@@ -205,7 +214,11 @@ def handle_quiz_mode(student_id: str, query: str, student_manager=None):
                 total = final["total"]
                 
                 # Get current profile to update quiz tracking
-                current_profile = student_manager.get_or_create_subject_preference(student_id, actual_subject)
+                if preference_manager:
+                    current_profile = preference_manager.get_or_create_subject_preference(student_id, actual_subject)
+                else:
+                    # Fallback to student_manager if preference_manager not provided
+                    current_profile = student_manager.get_or_create_subject_preference(student_id, actual_subject)
                 
                 # Update quiz score tracking
                 quiz_score_history = current_profile.get("quiz_score_history", [])
@@ -248,13 +261,18 @@ def handle_quiz_mode(student_id: str, query: str, student_manager=None):
                     "consecutive_perfect_scores": consecutive_perfect_scores
                 })
                 
-                student_manager.update_subject_preference(student_id, actual_subject, updated_profile)
+                # Use PreferenceManager for updating subject preference
+                if preference_manager:
+                    preference_manager.update_subject_preference(student_id, actual_subject, updated_profile)
+                else:
+                    # Fallback to student_manager if preference_manager not provided
+                    student_manager.update_subject_preference(student_id, actual_subject, updated_profile)
                 
                 # Update preferences based on quiz performance
                 if update_progress_and_regression:
                     try:
                         updated_profile = update_progress_and_regression(
-                            student_manager, student_id, actual_subject, updated_profile
+                            student_manager, student_id, actual_subject, updated_profile, preference_manager
                         )
                         print(f"📊 Quiz-based preference update: response_length={updated_profile.get('response_length')}, include_example={updated_profile.get('include_example')}")
                     except Exception as e:
@@ -274,7 +292,8 @@ def handle_quiz_mode(student_id: str, query: str, student_manager=None):
                     "accuracy": score_percentage
                 }
                 
-                student_manager.add_conversation(
+                # Use ConversationManager for adding conversations
+                conversation_manager.add_conversation(
                     student_id=student_id,
                     subject=actual_subject,
                     query=query,
@@ -285,13 +304,14 @@ def handle_quiz_mode(student_id: str, query: str, student_manager=None):
                         "final_score": final["score"],
                         "total_questions": final["total"],
                         "answers": final["answers"],
-                        "subject_agent_id": agent_id,  # Add agent ID for performance tracking
+                        "subject_agent_id": agent_id,  
                         "quiz_tracking": {
                             "consecutive_low_scores": consecutive_low_scores,
                             "consecutive_perfect_scores": consecutive_perfect_scores,
                             "score_history": quiz_score_history
                         }
-                    }
+                    },
+                    agent_id=get_dynamic_agent_id_for_subject(student_manager, student_id, actual_subject)
                 )
                 print(f"🔄 Quiz completion stored with performance tracking (score: {score_percentage:.1f}%)")
             except Exception as e:

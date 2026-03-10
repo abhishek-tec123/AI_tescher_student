@@ -92,7 +92,8 @@ def update_running_summary(
     student_id: str,
     subject: str,
     new_entry: dict,
-    student_manager
+    student_manager,
+    conversation_manager  # Add conversation_manager parameter
 ) -> str:
     """
     Updates running summary in MongoDB under:

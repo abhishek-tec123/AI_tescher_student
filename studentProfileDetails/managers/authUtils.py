@@ -1,5 +1,5 @@
 from fastapi import HTTPException, status
-from studentProfileDetails.db_utils import StudentManager
+from studentProfileDetails.dbutils import StudentManager, AuthManager
 from studentProfileDetails.managers.admin_manager import AdminManager
 from studentProfileDetails.auth.jwt_handler import (
     create_access_token,
@@ -17,8 +17,8 @@ def authenticate_user(email: str, password: str):
     """Authenticate student or admin."""
     
     # Try student
-    student_manager = StudentManager()
-    user = student_manager.authenticate_user(email, password)
+    auth_manager = AuthManager()
+    user = auth_manager.authenticate_user(email, password)
     
     if user:
         return user
@@ -137,10 +137,10 @@ def handle_change_password(current_user: dict, current_password: str, new_passwo
     """
 
     if current_user["role"] == "student":
-        student_manager = StudentManager()
+        auth_manager = AuthManager()
 
         # Verify current password
-        user = student_manager.authenticate_user(
+        user = auth_manager.authenticate_user(
             current_user["email"],
             current_password
         )
@@ -152,7 +152,7 @@ def handle_change_password(current_user: dict, current_password: str, new_passwo
             )
 
         # Update password
-        success = student_manager.update_password(
+        success = auth_manager.update_password(
             current_user["user_id"],
             new_password
         )
@@ -211,10 +211,10 @@ def handle_create_student_with_auth(payload):
     Handles student creation with authentication.
     Admin only.
     """
-    student_manager = StudentManager()
+    auth_manager = AuthManager()
 
     try:
-        student_id, password = student_manager.create_student_with_auth(
+        student_id, password = auth_manager.create_student_with_auth(
             name=payload.name,
             email=payload.email,
             class_name=payload.class_name,

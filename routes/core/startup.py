@@ -1,7 +1,7 @@
 # import logging
 
 # from Teacher_AI_Agent.model_cache import model_cache
-# from studentProfileDetails.db_utils import StudentManager
+# from studentProfileDetails.dbutils import StudentManager
 # from studentAgent.student_agent import StudentAgent
 
 # EMBED_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
@@ -31,7 +31,7 @@
 import logging
 
 from Teacher_AI_Agent.model_cache import model_cache
-from studentProfileDetails.db_utils import StudentManager
+from studentProfileDetails.dbutils import StudentManager
 from studentAgent.student_agent import StudentAgent
 
 EMBED_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"

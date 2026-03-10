@@ -4,6 +4,8 @@ from pydantic import BaseModel, Field, validator
 from datetime import datetime
 from studentProfileDetails.agents.agent_performance_monitor import AgentPerformanceMonitor
 from studentProfileDetails.auth.dependencies import get_current_user, require_role, require_any_role, require_permission
+from studentProfileDetails.agents.vector_performance_updater import get_vector_performance
+from .analytics import get_all_agent_performance  # reuse shared helper
 import logging
 
 logger = logging.getLogger(__name__)
@@ -196,6 +198,90 @@ async def get_metrics_summary(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ================================
+# LEGACY / BACKWARDS-COMPAT ROUTES
+# ================================
+
+@router.get("/all-agents-performance")
+async def legacy_all_agents_performance(
+    current_user: dict = Depends(require_any_role(["admin", "teacher"]))
+):
+    """
+    Backwards-compatible alias for /api/v1/performance/analytics/all-agents-performance.
+    Keeps existing frontend route /api/v1/performance/all-agents-performance working.
+    """
+    try:
+        logger.info(
+            f"User {current_user.get('user_id')} requesting LEGACY full agents performance"
+        )
+        agents = get_all_agent_performance()
+
+        return {
+            "success": True,
+            "message": f"Found {len(agents)} agents with detailed performance",
+            "total_agents": len(agents),
+            "agents": agents,
+        }
+    except Exception as e:
+        logger.error(f"Error in legacy_all_agents_performance: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving detailed agents performance: {str(e)}",
+        )
+
+
+@router.get("/agent-performance/{agent_id}")
+async def legacy_agent_performance(
+    agent_id: str,
+    current_user: dict = Depends(require_any_role(["admin", "teacher"]))
+):
+    """
+    Backwards-compatible alias for /api/v1/performance/analytics/agent-performance/{agent_id}.
+    Keeps existing frontend route /api/v1/performance/agent-performance/{agent_id} working.
+    """
+    try:
+        logger.info(
+            f"User {current_user.get('user_id')} requesting LEGACY performance for agent {agent_id}"
+        )
+
+        # Reuse logic from analytics.get_single_agent_performance
+        vector_performance = get_vector_performance(agent_id)
+
+        if not vector_performance or vector_performance.get("total_conversations", 0) == 0:
+            monitor = AgentPerformanceMonitor()
+            summary = monitor.get_agent_performance_summary(agent_id)
+
+            if summary:
+                return {
+                    "success": True,
+                    "message": f"Performance data for {agent_id}",
+                    "agent_id": agent_id,
+                    "source": "summary_collection",
+                    "performance": summary,
+                }
+
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Agent {agent_id} not found",
+            )
+
+        return {
+            "success": True,
+            "message": f"Performance data for {agent_id}",
+            "agent_id": agent_id,
+            "source": "vector_documents",
+            "performance": vector_performance,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in legacy_agent_performance for {agent_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving agent performance for {agent_id}: {str(e)}",
+        )
 
 
 # ================================

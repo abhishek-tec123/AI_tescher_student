@@ -3,7 +3,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional, Dict, Any, List
 
 from .jwt_handler import extract_user_from_token
-from ..db_utils import StudentManager
+from ..dbutils import StudentManager
 from ..managers.admin_manager import AdminManager
 
 security = HTTPBearer()

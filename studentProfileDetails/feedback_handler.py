@@ -1,5 +1,5 @@
 from fastapi import HTTPException, status
-from studentProfileDetails.db_utils import StudentManager
+from studentProfileDetails.dbutils import StudentManager
 
 from pydantic import BaseModel, Field
 from typing import Literal
