@@ -73,55 +73,12 @@ def handle_chat_intent(
     rl_metadata = chat.get("rl_metadata", {})
 
     # -----------------------------------------
-    # Synchronous processing for conversation ID 
+    # IMMEDIATE RESPONSE PRIORITY: Return LLM response first
     # -----------------------------------------
     
-    # Update progression BEFORE academic response
-    updated_profile = update_progress_and_regression(
-        student_manager,
-        payload.student_id,
-        payload.subject,
-        profile,
-        preference_manager  # Pass the preference_manager instance
-    )
-    print("📊 Profile update completed")
-    
-    # -----------------------------------------
-    # Store conversation with complete data (response + rl_metadata)
-    # -----------------------------------------
-    agent_id = get_dynamic_agent_id_for_subject(student_manager, payload.student_id, payload.subject)
-    conversation_manager = ConversationManager()  # Initialize here for use in conversation storage
-    
-    # Prepare additional data including rl_metadata
-    additional_data = {}
-    if agent_id:
-        additional_data["subject_agent_id"] = agent_id
-    if rl_metadata:
-        additional_data["rl_metadata"] = rl_metadata
-    
-    conversation_id = conversation_manager.add_conversation(
-        student_id=payload.student_id,
-        subject=payload.subject,
-        query=payload.query,
-        response=response,  # Store actual response
-        feedback="neutral",  # Default feedback
-        confusion_type=confusion_type or "NO_CONFUSION",
-        evaluation=None,
-        additional_data=additional_data
-    )
-    
-    if agent_id:
-        print(f"📝 Conversation stored with ID: {conversation_id} (agent: {agent_id})")
-    else:
-        print(f"⚠️ Agent not found for subject '{payload.subject}'. Performance tracking skipped.")
-    
-    print(f"✅ Conversation storage completed: {conversation_id}")
-
-    # -----------------------------------------
-    # Return immediate response with actual values
-    # -----------------------------------------
-    # Fetch current summary for immediate response
+    # Return immediate response with original profile (faster!)
     try:
+        conversation_manager = ConversationManager()
         context_summary = conversation_manager.get_subject_summary(payload.student_id, payload.subject)
     except Exception as e:
         print(f"⚠️ Failed to fetch existing summary in handle_chat_intent: {e}")
@@ -129,25 +86,61 @@ def handle_chat_intent(
     
     immediate_result = {
         "response": response,
-        "profile": updated_profile,  # Return updated profile
+        "profile": profile,  # Return original profile for speed
         "evaluation": {"status": "processing"},  # Placeholder evaluation
-        "conversation_id": str(conversation_id),  # Return actual conversation ID
+        "conversation_id": None,  # Will be set in background
         "context_summary": context_summary,  # Add context summary to response
     }
 
     # -----------------------------------------
-    # Background processing for non-critical operations only
+    # BACKGROUND PROCESSING: Handle all non-critical operations
     # -----------------------------------------
     def background_processing():
         try:
-            # Evaluate academic response (moved to background)
+            # 1️⃣ Update progression (moved to background for speed)
+            updated_profile = update_progress_and_regression(
+                student_manager,
+                payload.student_id,
+                payload.subject,
+                profile,
+                preference_manager
+            )
+            print("📊 Background profile update completed")
+            
+            # 2️⃣ Store conversation with complete data
+            agent_id = get_dynamic_agent_id_for_subject(student_manager, payload.student_id, payload.subject)
+            
+            # Prepare additional data including rl_metadata
+            additional_data = {}
+            if agent_id:
+                additional_data["subject_agent_id"] = agent_id
+            if rl_metadata:
+                additional_data["rl_metadata"] = rl_metadata
+            
+            conversation_id = conversation_manager.add_conversation(
+                student_id=payload.student_id,
+                subject=payload.subject,
+                query=payload.query,
+                response=response,  # Store actual response
+                feedback="neutral",  # Default feedback
+                confusion_type=confusion_type or "NO_CONFUSION",
+                evaluation=None,
+                additional_data=additional_data
+            )
+            
+            if agent_id:
+                print(f"📝 Background conversation stored with ID: {conversation_id} (agent: {agent_id})")
+            else:
+                print(f"⚠️ Background conversation stored - Agent not found for subject '{payload.subject}'")
+            
+            # 3️⃣ Evaluate academic response (moved to background)
             evaluation = evaluate_response(
                 query=payload.query,
                 response=response,
                 subject=payload.subject,
                 profile=updated_profile,
             )
-            print("🧠 Evaluation completed")
+            print("🧠 Background evaluation completed")
             
             # Performance tracking (moved to background)
             if agent_id:

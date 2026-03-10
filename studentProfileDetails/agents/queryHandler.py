@@ -153,7 +153,7 @@ def queryRouter(
     response = None
 
     # =============================
-    # CHAT (🔥 summary only here)
+    # CHAT (� PRIORITY: Immediate Response)
     # =============================
     if intent == "CHAT":
         result = handle_chat_intent(
@@ -166,38 +166,57 @@ def queryRouter(
         )
 
         response = result["response"]
-        conversation_id = result.get("conversation_id")
+        conversation_id = result.get("conversation_id")  # May be None (set in background)
         evolution_scores = result.get("evaluation", {})
 
-        new_entry = {
-            "conversation_id": str(conversation_id) if conversation_id else None,
-            "query": payload.query,
+        # 🚀 IMMEDIATE RESPONSE: Return to user immediately
+        immediate_response = {
             "response": response,
-            "evolution": evolution_scores
+            "conversation_id": conversation_id,
+            "evaluation": evolution_scores,
+            "profile": result.get("profile", profile),  # Use returned profile or original
+            "context_summary": result.get("context_summary"),
+            "status": "success"
         }
 
-        session_context.append(new_entry)
-
-        # Keep only last 10 raw messages
-        context_store[payload.student_id] = session_context[-10:]
-
-        # 🚀 Start background summary update for faster response
-        def update_summary_background():
+        # 🚀 BACKGROUND: Update session context and summary (non-blocking)
+        def background_session_update():
             try:
+                new_entry = {
+                    "conversation_id": str(conversation_id) if conversation_id else None,
+                    "query": payload.query,
+                    "response": response,
+                    "evolution": evolution_scores
+                }
+
+                session_context.append(new_entry)
+                # Keep only last 10 raw messages
+                context_store[payload.student_id] = session_context[-10:]
+
+                # Update conversation summary in background
+                from studentProfileDetails.summrizeStdConv import update_running_summary
+                new_entry_summary = {
+                    "query": payload.query,
+                    "response": response,
+                    "evolution": evolution_scores
+                }
                 update_running_summary(
                     student_id=payload.student_id,
                     subject=payload.subject,
-                    new_entry=new_entry,
+                    new_entry=new_entry_summary,
                     student_manager=student_manager,
-                    conversation_manager=ConversationManager()  # Pass both managers
+                    conversation_manager=ConversationManager()
                 )
-                print(f"🔄 Background summary update completed for: {payload.student_id}")
+                print(f"🔄 Background session update completed for: {payload.student_id}")
             except Exception as e:
-                print(f"❌ Background summary update failed: {e}")
-        
-        summary_thread = threading.Thread(target=update_summary_background, daemon=True)
-        summary_thread.start()
-        print(f"🚀 Summary update started in background for faster response")
+                print(f"❌ Background session update failed: {e}")
+
+        # Start background processing
+        session_thread = threading.Thread(target=background_session_update, daemon=True)
+        session_thread.start()
+        print(f"🚀 Session update moved to background for faster response")
+
+        return immediate_response
 
     # =============================
     # QUIZ

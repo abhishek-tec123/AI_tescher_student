@@ -26,6 +26,61 @@ def update_base_prompt(new_prompt: str):
     with _PROMPT_LOCK:
         PROMPT_CACHE["BASE_TEACHER_PROMPT"] = new_prompt.strip()
 
+# =====================================================
+# 🚀 RESPONSE CACHE FOR SPEED (5-minute TTL)
+# =====================================================
+import hashlib
+import time
+
+_RESPONSE_CACHE = {}
+_RESPONSE_LOCK = Lock()
+
+def _get_response_cache_key(query: str, subject: str, profile_hash: str) -> str:
+    """Generate cache key for response caching."""
+    content = f"{query}_{subject}_{profile_hash}"
+    return hashlib.md5(content.encode()).hexdigest()
+
+def _get_profile_hash(profile: dict) -> str:
+    """Generate hash of relevant profile fields for caching."""
+    relevant_fields = {
+        "level": profile.get("level", "basic"),
+        "tone": profile.get("tone", "friendly"),
+        "response_length": profile.get("response_length", "medium"),
+        "include_example": profile.get("include_example", True)
+    }
+    return hashlib.md5(str(relevant_fields).encode()).hexdigest()[:16]
+
+def get_cached_response(query: str, subject: str, profile: dict) -> str:
+    """Get cached response if available and not expired."""
+    profile_hash = _get_profile_hash(profile)
+    cache_key = _get_response_cache_key(query, subject, profile_hash)
+    
+    with _RESPONSE_LOCK:
+        if cache_key in _RESPONSE_CACHE:
+            cached_data, timestamp = _RESPONSE_CACHE[cache_key]
+            # Cache for 5 minutes (300 seconds)
+            if time.time() - timestamp < 300:
+                print(f"📂 Using cached response for query: {query[:30]}...")
+                return cached_data
+            else:
+                # Remove expired entry
+                del _RESPONSE_CACHE[cache_key]
+    return None
+
+def cache_response(query: str, subject: str, profile: dict, response: str):
+    """Cache a response for future use."""
+    profile_hash = _get_profile_hash(profile)
+    cache_key = _get_response_cache_key(query, subject, profile_hash)
+    
+    with _RESPONSE_LOCK:
+        _RESPONSE_CACHE[cache_key] = (response, time.time())
+        # Limit cache size to prevent memory issues
+        if len(_RESPONSE_CACHE) > 100:
+            # Remove oldest entry (simple FIFO)
+            oldest_key = min(_RESPONSE_CACHE.keys(), key=lambda k: _RESPONSE_CACHE[k][1])
+            del _RESPONSE_CACHE[oldest_key]
+        print(f"💾 Cached response for query: {query[:30]}...")
+
 
 # =====================================================
 # 🎯 INTENT DETECTION
@@ -163,6 +218,26 @@ def diagnosis_chat(
     """
     Preference-aware, session-aware teacher response
     """
+
+    # -----------------------------
+    # 🚀 RESPONSE CACHE: Check for cached response first
+    # -----------------------------
+    cached_response = get_cached_response(query, subject, student_profile)
+    if cached_response:
+        return {
+            "response": cached_response,
+            "confusion_type": "NO_CONFUSION",  # Cached responses assumed non-confused
+            "rl_metadata": {
+                "trajectory": ["cached_response"],
+                "optimized_query": query,
+                "top_k": 10,
+                "cache_hit": True
+            },
+            "debug_info": {
+                "cache_hit": True,
+                "response_time": "cached"
+            }
+        }
 
     # -----------------------------
     # Get global RAG settings for debug info
@@ -305,6 +380,11 @@ def diagnosis_chat(
         "optimized_query": state["current_query"],
         "top_k": top_k
     }
+
+    # -----------------------------
+    # 🚀 CACHE RESPONSE for future speed
+    # -----------------------------
+    cache_response(query, subject, student_profile, response)
 
     return {
         "response": response,
