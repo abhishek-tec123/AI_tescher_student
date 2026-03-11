@@ -5,6 +5,8 @@ Topic Extraction Agent - Extracts syllabus/topics/subtopics from subject agent c
 import logging
 from typing import Dict, List, Optional, Any
 from datetime import datetime
+import concurrent.futures
+import threading
 
 from utils.topic_extraction_utils import (
     initialize_utils,
@@ -46,6 +48,7 @@ class TopicExtractionAgent:
         self.embedding_model_name = embedding_model_name
         self._embedding_model = embedding_model
         self._loaded = False
+        self._llm = None  # Cache LLM instance
 
         # Initialize shared utils
         initialize_utils(model_cache=model_cache)
@@ -60,6 +63,23 @@ class TopicExtractionAgent:
             self._embedding_model = get_embedding_model(self.embedding_model_name)
         return self._embedding_model
 
+    @property
+    def llm(self) -> Any:
+        """Get cached LLM instance (lazy load)."""
+        if self._llm is None:
+            from langchain_groq import ChatGroq
+            import os
+            
+            groq_api_key = os.getenv("GROQ_API_KEY")
+            if not groq_api_key:
+                raise ValueError("GROQ_API_KEY not set")
+                
+            self._llm = ChatGroq(
+                model_name="meta-llama/llama-4-scout-17b-16e-instruct",
+                api_key=groq_api_key
+            )
+        return self._llm
+
     # -----------------------------
     # Preload Agent
     # -----------------------------
@@ -71,6 +91,7 @@ class TopicExtractionAgent:
 
         logger.info("⚡ Loading TopicExtractionAgent...")
         _ = self.embedding_model
+        _ = self.llm  # Preload LLM
         self._loaded = True
         logger.info("✅ TopicExtractionAgent ready")
 
@@ -163,30 +184,43 @@ class TopicExtractionAgent:
         if not chunk_texts:
             return {"topics": []}
 
-        chunks_per_sample = 10
+        # Optimize sample size for better performance
+        chunks_per_sample = 20  # Increased from 10 to reduce LLM calls
+        max_samples = min(5, (len(chunk_texts) + chunks_per_sample - 1) // chunks_per_sample)  # Limit to 5 samples max
         samples = []
 
-        for i in range(0, len(chunk_texts), chunks_per_sample):
-            sample_chunks = chunk_texts[i:i + chunks_per_sample]
+        for i in range(min(max_samples, (len(chunk_texts) + chunks_per_sample - 1) // chunks_per_sample)):
+            start_idx = i * chunks_per_sample
+            end_idx = min(start_idx + chunks_per_sample, len(chunk_texts))
+            sample_chunks = chunk_texts[start_idx:end_idx]
             sample_text = "\n\n".join(sample_chunks)
-            samples.append(sample_text[:3000])
+            samples.append(sample_text[:2000])  # Reduced from 3000 to 2000 chars
 
         logger.info(
             f"📊 Processing {len(chunk_texts)} chunks "
             f"in {len(samples)} samples"
         )
 
+        # Process samples concurrently for better performance
         all_topics = []
-
-        for i, sample in enumerate(samples):
-            logger.info(f"🔍 Analyzing sample {i + 1}/{len(samples)}")
-
-            topics = self._extract_topics_from_sample(
-                sample,
-                include_subtopics
-            )
-
-            all_topics.extend(topics)
+        max_workers = min(3, len(samples))  # Limit to 3 concurrent workers
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all tasks
+            future_to_index = {
+                executor.submit(self._extract_topics_from_sample, sample, include_subtopics): i 
+                for i, sample in enumerate(samples)
+            }
+            
+            # Collect results as they complete
+            for future in concurrent.futures.as_completed(future_to_index):
+                index = future_to_index[future]
+                try:
+                    topics = future.result()
+                    logger.info(f"🔍 Completed sample {index + 1}/{len(samples)}")
+                    all_topics.extend(topics)
+                except Exception as e:
+                    logger.error(f"❌ Error processing sample {index + 1}: {e}")
 
         organized_topics = organize_topics_hierarchy(
             all_topics,
@@ -207,10 +241,15 @@ class TopicExtractionAgent:
         prompt = create_topic_extraction_prompt(include_subtopics)
 
         try:
-            response_text = call_llm_direct(
-                prompt,
-                sample_text[:2000]
-            )
+            from langchain_core.messages import HumanMessage
+            
+            if sample_text:
+                full_input = f"{prompt}\n\nCONTENT:\n{sample_text[:2000]}"
+            else:
+                full_input = prompt
+
+            response = self.llm.invoke([HumanMessage(content=full_input)])
+            response_text = getattr(response, "content", str(response)).strip()
 
             if not response_text:
                 logger.warning("Empty LLM response")
