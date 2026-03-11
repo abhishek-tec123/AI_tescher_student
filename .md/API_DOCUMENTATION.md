@@ -38,10 +38,10 @@ POST /auth/create-student-with-auth
 
 Request Body:
 {
-  "username": "student1",
-  "password": "password123",
+  "name": "John Doe",
   "email": "student@example.com",
-  "name": "John Doe"
+  "class_name": "Class10A",
+  "password": "password123"
 }
 
 
