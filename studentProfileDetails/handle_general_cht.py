@@ -52,7 +52,13 @@ def build_context_text(context):
 # -------------------------------------------------
 # Greeting Handler
 # -------------------------------------------------
-def handle_greeting_chat(*, payload, student_manager, profile):
+def handle_greeting_chat(
+    *,
+    payload,
+    student_manager,
+    profile,
+    chat_session_id=None,  # Add chat_session_id parameter
+):
     # Get agent ID for potential introduction
     agent_id = get_dynamic_agent_id_for_subject(student_manager, payload.student_id, payload.subject)
     print(f"🔍 DEBUG: agent_id for subject '{payload.subject}': {agent_id}")
@@ -115,7 +121,8 @@ def handle_greeting_chat(*, payload, student_manager, profile):
         response=response,
         confusion_type="NO_CONFUSION",
         evaluation=None,
-        additional_data=additional_data
+        additional_data=additional_data,
+        chat_session_id=chat_session_id
     )
     return {
         "response": response,
@@ -127,7 +134,7 @@ def handle_greeting_chat(*, payload, student_manager, profile):
 # General (Non-academic) Chat Handler – LLM ONLY
 # -------------------------------------------------
 def handle_general_chat_llm(
-    *, payload, student_manager, profile, context
+    *, payload, student_manager, profile, context, chat_session_id=None
 ):
     context_text = build_context_text(context)
 
@@ -157,7 +164,8 @@ def handle_general_chat_llm(
         response=response,
         confusion_type="NO_CONFUSION",
         evaluation=None,
-        additional_data=additional_data
+        additional_data=additional_data,
+        chat_session_id=chat_session_id
     )
     return {
         "response": response,

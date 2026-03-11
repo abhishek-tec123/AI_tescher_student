@@ -384,17 +384,55 @@ class ConversationManager:
         Returns:
             Number of modified documents
         """
-        if additional_data:
-            update_doc = {"$set": {}}
-            for key, value in additional_data.items():
-                update_doc["$set"][f"additional_data.{key}"] = value
+        if not additional_data:
+            return 0
             
-            # Find the conversation by checking all subject arrays
-            result = self.students.update_one(
-                {"conversation_history.$[].conversation_id": conversation_id},
-                update_doc
+        # First, find which subject contains this conversation
+        try:
+            conversation_obj_id = ObjectId(conversation_id)
+        except Exception:
+            return 0
+            
+        # Get all subject keys from sample documents
+        sample_docs = self.students.find(
+            {"conversation_history": {"$exists": True}},
+            {"conversation_history": 1}
+        )
+        
+        subjects = set()
+        for doc in sample_docs:
+            subjects.update(doc.get("conversation_history", {}).keys())
+        
+        if not subjects:
+            return 0
+        
+        # Search through each subject to find our conversation
+        for subject in subjects:
+            # Check if this subject contains the conversation
+            doc = self.students.find_one(
+                {f"conversation_history.{subject}._id": conversation_obj_id},
+                {f"conversation_history.{subject}.$": 1}
             )
-            return result.modified_count
+            
+            if doc and doc.get("conversation_history", {}).get(subject):
+                # Found the conversation in this subject
+                update_doc = {"$set": {}}
+                for key, value in additional_data.items():
+                    # Store evaluation and subject_agent_id directly at conversation level
+                    # Other fields go under additional_data
+                    if key in ["evaluation", "subject_agent_id", "chat_session_id"]:
+                        update_doc["$set"][f"conversation_history.{subject}.$.{key}"] = value
+                    else:
+                        update_doc["$set"][f"conversation_history.{subject}.$.additional_data.{key}"] = value
+                
+                # Update the conversation
+                result = self.students.update_one(
+                    {f"conversation_history.{subject}._id": conversation_obj_id},
+                    update_doc
+                )
+                
+                return result.modified_count
+        
         return 0
 
     def get_conversations_by_chat_session(
@@ -455,7 +493,7 @@ class ConversationManager:
                 "confusion_type": conv.get("confusion_type", "NO_CONFUSION"),
                 "timestamp": conv["timestamp"].isoformat() if conv.get("timestamp") else None,
                 "evaluation": conv.get("evaluation", {}),
-                "agent_id": conv.get("agent_id")
+                "agent_id": conv.get("subject_agent_id")
             }
             for conv in session_conversations
         ]

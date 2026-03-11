@@ -34,6 +34,7 @@ def handle_chat_intent(
             payload=payload,
             student_manager=student_manager,
             profile=profile,
+            chat_session_id=chat_session_id
         )
 
     # -----------------------------------------
@@ -45,6 +46,7 @@ def handle_chat_intent(
             student_manager=student_manager,
             profile=profile,
             context=context,
+            chat_session_id=chat_session_id
         )
 
     # -----------------------------------------
@@ -130,18 +132,21 @@ def handle_chat_intent(
             # 2️⃣ Update conversation with additional data
             agent_id = get_dynamic_agent_id_for_subject(student_manager, payload.student_id, payload.subject)
             
-            # Prepare additional data including rl_metadata
-            additional_data = {}
+            # Prepare additional data - evaluation and agent_id go directly to conversation level
+            conversation_updates = {}
             if agent_id:
-                additional_data["subject_agent_id"] = agent_id
+                conversation_updates["subject_agent_id"] = agent_id
             if rl_metadata:
-                additional_data["rl_metadata"] = rl_metadata
+                conversation_updates["rl_metadata"] = rl_metadata
+            if chat_session_id:
+                conversation_updates["chat_session_id"] = chat_session_id
             
-            # Update the existing conversation with additional data
-            conversation_manager.update_conversation(
-                conversation_id=conversation_id,
-                additional_data=additional_data
-            )
+            # Update the existing conversation with evaluation and agent data
+            if conversation_updates:
+                conversation_manager.update_conversation(
+                    conversation_id=conversation_id,
+                    additional_data=conversation_updates
+                )
             
             if agent_id:
                 print(f"📝 Background conversation updated with agent: {agent_id}")
@@ -156,6 +161,14 @@ def handle_chat_intent(
                 profile=updated_profile,
             )
             print("🧠 Background evaluation completed")
+            
+            # 4️⃣ Store evaluation scores in conversation
+            if evaluation:
+                conversation_manager.update_conversation(
+                    conversation_id=conversation_id,
+                    additional_data={"evaluation": evaluation}
+                )
+                print(f"📊 Evaluation scores stored for conversation: {conversation_id}")
             
             # Performance tracking (moved to background)
             if agent_id:
