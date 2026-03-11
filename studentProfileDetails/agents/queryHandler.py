@@ -4,9 +4,10 @@ from studentProfileDetails.quizHelper import create_quiz_session, get_current_qu
 from studentProfileDetails.intent_handlers import handle_chat_intent, handle_study_plan_intent
 from studentProfileDetails.agents.mainAgent import detect_intent_and_topic
 from studentProfileDetails.agents.quiz_generator import generate_quiz_from_history
-from studentProfileDetails.agents.notes_agent import generate_notes
+from studentProfileDetails.agents.notes_agent import generate_notes, generate_summary
 from studentProfileDetails.summrizeStdConv import update_running_summary
 from studentProfileDetails.utils.agent_utils import get_dynamic_agent_id_for_subject
+from studentProfileDetails.dbutils import ConversationManager, PreferenceManager
 import time
 import threading
 
@@ -15,25 +16,28 @@ student_preference_cache = {}
 student_existence_cache = {}
 cache_lock = threading.Lock()
 
-def get_cached_preference(student_id, subject, student_manager):
+def get_cached_preference(student_id, subject, preference_manager):
     """Get student preference with caching for faster response."""
     cache_key = f"{student_id}_{subject}"
     
+    # Check cache first
     with cache_lock:
         if cache_key in student_preference_cache:
-            cached_pref, timestamp = student_preference_cache[cache_key]
-            # Cache for 5 minutes
-            if time.time() - timestamp < 300:
-                print(f"🎯 Using cached preference for {cache_key}")
-                return cached_pref
+            cached_entry = student_preference_cache[cache_key]
+            if time.time() - cached_entry["timestamp"] < 300:  # 5 minutes cache
+                print(f"📂 Using cached preference for {cache_key}")
+                return cached_entry["preference"]
     
     # If not in cache or expired, fetch from database
     print(f"📂 Fetching preference from database for {cache_key}")
-    preference = student_manager.get_or_create_subject_preference(student_id, subject)
+    preference = preference_manager.get_or_create_subject_preference(student_id, subject)
     
     # Update cache
     with cache_lock:
-        student_preference_cache[cache_key] = (preference, time.time())
+        student_preference_cache[cache_key] = {
+            "preference": preference,
+            "timestamp": time.time()
+        }
     
     return preference
 
@@ -61,20 +65,23 @@ def update_performance_background(student_manager, student_id, subject, query, r
     """Background function to update performance metrics asynchronously."""
     try:
         agent_id = get_dynamic_agent_id_for_subject(student_manager, student_id, subject)
+        additional_data = {}
         if agent_id:
-            student_manager.add_conversation(
-                student_id=student_id,
-                subject=subject,
-                query=query,
-                response=response,
-                evaluation=evolution_scores,
-                quality_scores=evolution_scores,
-                feedback=evolution_scores.get("feedback", "like"),
-                confusion_type=evolution_scores.get("confusion_type", "NO_CONFUSION"),
-                additional_data={
-                    "subject_agent_id": agent_id
-                }
-            )
+            additional_data["subject_agent_id"] = agent_id
+            
+        conversation_manager.add_conversation(
+            student_id=student_id,
+            subject=subject,
+            query=query,
+            response=response,
+            evaluation=evolution_scores,
+            quality_scores=evolution_scores,
+            feedback=evolution_scores.get("feedback", "like"),
+            confusion_type=evolution_scores.get("confusion_type", "NO_CONFUSION"),
+            additional_data=additional_data
+        )
+        
+        if agent_id:
             print(f"🔄 Background performance update completed for agent: {agent_id}")
             
             # Clear preference cache when student data is updated
@@ -95,6 +102,8 @@ def queryRouter(
     student_manager,
     context_store
 ):
+    # Create preference manager instance for preference operations
+    preference_manager = PreferenceManager()
 
     conversation_id = None  # ✅ local variable (thread-safe)
     context_summary = None
@@ -119,7 +128,8 @@ def queryRouter(
     quiz_response = handle_quiz_mode(
         student_id=payload.student_id,
         query=payload.query,
-        student_manager=student_manager
+        student_manager=student_manager,
+        preference_manager=preference_manager
     )
 
     if quiz_response:
@@ -130,18 +140,20 @@ def queryRouter(
     # -----------------------------
     profile = normalize_student_preference(
         get_cached_preference(
-            payload.student_id, payload.subject, student_manager
+            payload.student_id, payload.subject, preference_manager
         )
     )
 
-    intent_result = detect_intent_and_topic(payload.query)
+    intent_result = detect_intent_and_topic(payload.query, payload.subject)
     intent = intent_result["intent"]
     topic = intent_result.get("topic")
 
+    # Initialize conversation_manager for use across all intents
+    conversation_manager = ConversationManager()
     response = None
 
     # =============================
-    # CHAT (🔥 summary only here)
+    # CHAT (� PRIORITY: Immediate Response)
     # =============================
     if intent == "CHAT":
         result = handle_chat_intent(
@@ -149,48 +161,69 @@ def queryRouter(
             student_manager=student_manager,
             payload=payload,
             profile=profile,
-            context=session_context
+            context=session_context,
+            preference_manager=preference_manager  # Pass preference_manager parameter
         )
 
         response = result["response"]
-        conversation_id = result.get("conversation_id")
+        conversation_id = result.get("conversation_id")  # May be None (set in background)
         evolution_scores = result.get("evaluation", {})
 
-        new_entry = {
-            "conversation_id": str(conversation_id) if conversation_id else None,
-            "query": payload.query,
+        # 🚀 IMMEDIATE RESPONSE: Return to user immediately
+        immediate_response = {
             "response": response,
-            "evolution": evolution_scores
+            "conversation_id": conversation_id,
+            "evaluation": evolution_scores,
+            "profile": result.get("profile", profile),  # Use returned profile or original
+            "context_summary": result.get("context_summary"),
+            "status": "success"
         }
 
-        session_context.append(new_entry)
-
-        # Keep only last 10 raw messages
-        context_store[payload.student_id] = session_context[-10:]
-
-        # � Start background summary update for faster response
-        def update_summary_background():
+        # 🚀 BACKGROUND: Update session context and summary (non-blocking)
+        def background_session_update():
             try:
+                new_entry = {
+                    "conversation_id": str(conversation_id) if conversation_id else None,
+                    "query": payload.query,
+                    "response": response,
+                    "evolution": evolution_scores
+                }
+
+                session_context.append(new_entry)
+                # Keep only last 10 raw messages
+                context_store[payload.student_id] = session_context[-10:]
+
+                # Update conversation summary in background
+                from studentProfileDetails.summrizeStdConv import update_running_summary
+                new_entry_summary = {
+                    "query": payload.query,
+                    "response": response,
+                    "evolution": evolution_scores
+                }
                 update_running_summary(
                     student_id=payload.student_id,
                     subject=payload.subject,
-                    new_entry=new_entry,
-                    student_manager=student_manager
+                    new_entry=new_entry_summary,
+                    student_manager=student_manager,
+                    conversation_manager=ConversationManager()
                 )
-                print(f"🔄 Background summary update completed for: {payload.student_id}")
+                print(f"🔄 Background session update completed for: {payload.student_id}")
             except Exception as e:
-                print(f"❌ Background summary update failed: {e}")
-        
-        summary_thread = threading.Thread(target=update_summary_background, daemon=True)
-        summary_thread.start()
-        print(f"🚀 Summary update started in background for faster response")
+                print(f"❌ Background session update failed: {e}")
+
+        # Start background processing
+        session_thread = threading.Thread(target=background_session_update, daemon=True)
+        session_thread.start()
+        print(f"🚀 Session update moved to background for faster response")
+
+        return immediate_response
 
     # =============================
     # QUIZ
     # =============================
     elif intent == "QUIZ":
         # Fetch stored conversation history from MongoDB
-        stored_history = student_manager.get_chat_history_by_agent(
+        stored_history = conversation_manager.get_chat_history_by_agent(
             student_id=payload.student_id,
             subject=payload.subject,
             limit=20  # Get all available history for better quiz generation
@@ -245,26 +278,28 @@ def queryRouter(
                     # Get agent ID for performance tracking
                     agent_id = get_dynamic_agent_id_for_subject(student_manager, payload.student_id, payload.subject)
                     
+                    additional_data = {
+                        **quiz_start_entry.get("quiz_metadata", {}),
+                        "quiz_session": True,
+                        "quality_scores": {
+                            "overall_score": 80.0,  # Default score for quiz start
+                        }
+                    }
                     if agent_id:
-                        student_manager.add_conversation(
-                            student_id=payload.student_id,
-                            subject=payload.subject,
-                            query=quiz_start_entry["query"],
-                            response=quiz_start_entry["response"],
-                            additional_data={
-                                **quiz_start_entry.get("quiz_metadata", {}),
-                                "subject_agent_id": agent_id,  # Add agent ID for performance tracking
-                                "quiz_session": True,
-                                "quality_scores": {
-                                    "overall_score": 80.0,  # Default score for quiz start
-                                    "engagement": 85.0,
-                                    "participation": 90.0
-                                }
-                            }
-                        )
-                        print(f"🔄 Background quiz storage completed for: {payload.student_id}")
+                        additional_data["subject_agent_id"] = agent_id
+                        
+                    conversation_manager.add_conversation(
+                        student_id=payload.student_id,
+                        subject=payload.subject,
+                        query=quiz_start_entry["query"],
+                        response=quiz_start_entry["response"],
+                        additional_data=additional_data
+                    )
+                    
+                    if agent_id:
+                        print(f"🔄 Background quiz storage completed for: {payload.student_id} (agent: {agent_id})")
                     else:
-                        print(f"⚠️ Quiz storage skipped - Agent not found")
+                        print(f"⚠️ Quiz storage completed - Agent not found")
                 except Exception as e:
                     print(f"❌ Background quiz storage failed: {e}")
             
@@ -296,16 +331,20 @@ def queryRouter(
         # 🚀 Start background conversation storage for study plan
         def store_study_plan_background():
             try:
-                student_manager.add_conversation(
+                additional_data = {
+                    "study_plan_action": "generated",
+                    "topic": topic,
+                    "study_plan": response.get("study_plan", "")
+                }
+                if agent_id:
+                    additional_data["subject_agent_id"] = agent_id
+                    
+                conversation_manager.add_conversation(
                     student_id=payload.student_id,
                     subject=payload.subject,
                     query=payload.query,
                     response=response.get("study_plan", ""),  # Store actual study plan content
-                    additional_data={
-                        "study_plan_action": "generated",
-                        "topic": topic,
-                        "study_plan": response.get("study_plan", "")
-                    }
+                    additional_data=additional_data
                 )
                 print(f"🔄 Background study plan storage completed for: {payload.student_id}")
             except Exception as e:
@@ -319,11 +358,11 @@ def queryRouter(
     # NOTES (🚫 no summary update)
     # =============================
     elif intent == "NOTES":
-        # Fetch stored conversation history from MongoDB
-        stored_history = student_manager.get_chat_history_by_agent(
+        # Fetch ALL stored conversation history from MongoDB (no limit)
+        stored_history = conversation_manager.get_chat_history_by_agent(
             student_id=payload.student_id,
             subject=payload.subject,
-            limit=20  # Get all available history for better notes generation
+            limit=None  # Get all available history for better notes generation
         )
         
         # Combine session context with stored history
@@ -358,16 +397,20 @@ def queryRouter(
         # 🚀 Start background conversation storage for notes
         def store_notes_background():
             try:
-                student_manager.add_conversation(
+                additional_data = {
+                    "notes_action": "generated",
+                    "topic": topic,
+                    "history_sources": len(combined_history)
+                }
+                if agent_id:
+                    additional_data["subject_agent_id"] = agent_id
+                    
+                conversation_manager.add_conversation(
                     student_id=payload.student_id,
                     subject=payload.subject,
                     query=payload.query,
                     response=notes,  # Store actual notes content
-                    additional_data={
-                        "notes_action": "generated",
-                        "topic": topic,
-                        "history_sources": len(combined_history)
-                    }
+                    additional_data=additional_data
                 )
                 print(f"🔄 Background notes storage completed for: {payload.student_id}")
             except Exception as e:
@@ -384,9 +427,82 @@ def queryRouter(
 
         context_store[payload.student_id] = session_context[-10:]
 
+    # =============================
+    # SUMMARY (🚫 no summary update)
+    # =============================
+    elif intent == "SUMMARY":
+        # Fetch ALL stored conversation history from MongoDB (no limit)
+        stored_history = conversation_manager.get_chat_history_by_agent(
+            student_id=payload.student_id,
+            subject=payload.subject,
+            limit=None  # Get all available history for comprehensive summary
+        )
+        
+        # Combine session context with stored history
+        # Convert stored history to the format expected by summary generator
+        formatted_stored_history = []
+        for item in stored_history:
+            formatted_stored_history.append({
+                "query": item.get("query", ""),
+                "response": item.get("response", ""),
+                "evolution": item.get("evaluation", {})
+            })
+        
+        # Combine session context (most recent) with stored history
+        combined_history = formatted_stored_history + session_context
+        
+        summary = generate_summary(
+            topic=topic,
+            chat_history=combined_history,
+            student_profile=profile
+        )
+
+        response = {
+            "topic": topic,
+            "summary": summary,
+            "metadata": {
+                "history_used": len(combined_history),
+                "stored_history": len(formatted_stored_history),
+                "session_context": len(session_context)
+            }
+        }
+
+        # 🚀 Start background conversation storage for summary
+        def store_summary_background():
+            try:
+                additional_data = {
+                    "summary_action": "generated",
+                    "topic": topic,
+                    "history_sources": len(combined_history)
+                }
+                if agent_id:
+                    additional_data["subject_agent_id"] = agent_id
+                    
+                conversation_manager.add_conversation(
+                    student_id=payload.student_id,
+                    subject=payload.subject,
+                    query=payload.query,
+                    response=summary,  # Store actual summary content
+                    additional_data=additional_data
+                )
+                print(f"🔄 Background summary storage completed for: {payload.student_id}")
+            except Exception as e:
+                print(f"❌ Background summary storage failed: {e}")
+        
+        summary_thread = threading.Thread(target=store_summary_background, daemon=True)
+        summary_thread.start()
+        print(f"🚀 Summary storage started in background for faster response")
+
+        session_context.append({
+            "query": payload.query,
+            "response": summary
+        })
+
+        context_store[payload.student_id] = session_context[-10:]
+
     # Fetch current summary from MongoDB for immediate response
     try:
-        context_summary = student_manager.get_subject_summary(payload.student_id, payload.subject)
+        context_summary = conversation_manager.get_subject_summary(payload.student_id, payload.subject)
         print(f"📖 Retrieved existing summary for {payload.student_id}_{payload.subject}")
     except Exception as e:
         print(f"⚠️ Failed to fetch existing summary: {e}")

@@ -3,6 +3,8 @@
 # - level, learning_style, response_length, include_example updated and persisted.
 # - New subject gets defaults first; then these keys update based on query streaks.
 # -----------------------------
+from studentProfileDetails.dbutils import ConversationManager
+
 def _print_profile(label: str, profile: dict):
     keys = ("level", "tone", "learning_style", "response_length", "include_example", "common_mistakes", "confusion_counter")
     print(f"\n--- {label} ---")
@@ -17,13 +19,15 @@ def print_profile(label: str, profile: dict):
     _print_profile(label, profile)
 
 
-def update_progress_and_regression(student_manager, student_id, subject, profile):
+def update_progress_and_regression(student_manager, student_id, subject, profile, preference_manager=None):
     # Snapshot current preference (before) so we only print if model updates it
     _keys = ("level", "tone", "learning_style", "response_length", "include_example", "common_mistakes", "confusion_counter", "quiz_score_history", "consecutive_low_scores", "consecutive_perfect_scores")
     _defaults = {"level": "basic", "tone": "friendly", "learning_style": "step-by-step", "response_length": "long", "include_example": True, "common_mistakes": [], "confusion_counter": {}, "quiz_score_history": [], "consecutive_low_scores": 0, "consecutive_perfect_scores": 0}
     before_snapshot = {k: profile.get(k, _defaults.get(k)) for k in _keys}
 
-    history = student_manager.get_conversation_history(
+    # Use ConversationManager for conversation history
+    conversation_manager = ConversationManager()
+    history = conversation_manager.get_conversation_history(
         student_id, subject, limit=8
     )
 
@@ -34,15 +38,16 @@ def update_progress_and_regression(student_manager, student_id, subject, profile
 
     for h in history:
         c = h.get("confusion_type", "NO_CONFUSION")
-        if c == "NO_CONFUSION":
-            if wrong_streak > 0:
-                break
-            correct_streak += 1
-        else:
-            if correct_streak > 0:
-                break
-            wrong_streak += 1
+        if c != "NO_CONFUSION":
             confusion_counts[c] = confusion_counts.get(c, 0) + 1
+
+        # Check for correct/wrong patterns
+        if h.get("feedback") == "correct":
+            correct_streak += 1
+            wrong_streak = 0
+        elif h.get("feedback") == "wrong":
+            wrong_streak += 1
+            correct_streak = 0
 
     # ------------------
     # CHECK CONFUSION_COUNTER THRESHOLDS (NEW LOGIC)
@@ -194,7 +199,8 @@ def update_progress_and_regression(student_manager, student_id, subject, profile
     for k, v in defaults.items():
         full_preference.setdefault(k, v)
 
-    student_manager.update_subject_preference(
+    # Use PreferenceManager for updating subject preference
+    preference_manager.update_subject_preference(
         student_id, subject, full_preference
     )
 

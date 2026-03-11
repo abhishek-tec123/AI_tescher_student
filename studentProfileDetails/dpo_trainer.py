@@ -8,7 +8,7 @@ from bson import ObjectId
 # Add paths
 sys.path.append(os.getcwd())
 
-from studentProfileDetails.db_utils import StudentManager
+from studentProfileDetails.dbutils import StudentManager
 from studentProfileDetails.agents.rl_optimizer import RLOptimizer
 
 logging.basicConfig(level=logging.INFO)

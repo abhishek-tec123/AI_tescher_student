@@ -1,6 +1,6 @@
 import re
 from studentProfileDetails.generate_response_with_groq import generate_response_with_groq
-from studentProfileDetails.utils.agent_utils import get_dynamic_agent_id_for_subject  # ✅ Import dynamic agent ID mapping
+from studentProfileDetails.dbutils import ConversationManager  # ✅ Import dynamic agent ID mapping
 from studentProfileDetails.prompt_templates import detect_formal_communication  # ✅ Import formal detection from modular templates
 from studentProfileDetails.agents.mainAgent import get_agent_metadata  # ✅ Import agent metadata from mainAgent
 
@@ -57,6 +57,9 @@ def handle_greeting_chat(*, payload, student_manager, profile):
     agent_id = get_dynamic_agent_id_for_subject(student_manager, payload.student_id, payload.subject)
     print(f"🔍 DEBUG: agent_id for subject '{payload.subject}': {agent_id}")
     
+    # Create conversation manager instance
+    conversation_manager = ConversationManager()
+    
     # Check if this is a formal greeting
     is_formal = detect_formal_communication(payload.query)
     print(f"🔍 DEBUG: is_formal greeting '{payload.query}': {is_formal}")
@@ -101,27 +104,19 @@ def handle_greeting_chat(*, payload, student_manager, profile):
         system_prompt=system_prompt,
     )
 
+    additional_data = {}
     if agent_id:
-        conversation_id = student_manager.add_conversation(
-            student_id=payload.student_id,
-            subject=payload.subject,
-            query=payload.query,
-            response=response,
-            confusion_type="NO_CONFUSION",
-            evaluation=None,
-            additional_data={"subject_agent_id": agent_id}
-        )
-    else:
-        conversation_id = student_manager.add_conversation(
-            student_id=payload.student_id,
-            subject=payload.subject,
-            query=payload.query,
-            response=response,
-            confusion_type="NO_CONFUSION",
-            evaluation=None,
-        )
-        print(f"⚠️ Agent not found for subject '{payload.subject}'. Performance tracking skipped.")
+        additional_data["subject_agent_id"] = agent_id
 
+    conversation_id = conversation_manager.add_conversation(
+        student_id=payload.student_id,
+        subject=payload.subject,
+        query=payload.query,
+        response=response,
+        confusion_type="NO_CONFUSION",
+        evaluation=None,
+        additional_data=additional_data
+    )
     return {
         "response": response,
         "profile": profile,
@@ -150,31 +145,23 @@ def handle_general_chat_llm(
     )
 
     agent_id = get_dynamic_agent_id_for_subject(student_manager, payload.student_id, payload.subject)
+    
+    additional_data = {}
     if agent_id:
-        conversation_id = student_manager.add_conversation(
-            student_id=payload.student_id,
-            subject=payload.subject,
-            query=payload.query,
-            response=response,
-            confusion_type="NO_CONFUSION",
-            evaluation=None,
-            additional_data={"subject_agent_id": agent_id}
-        )
-    else:
-        conversation_id = student_manager.add_conversation(
-            student_id=payload.student_id,
-            subject=payload.subject,
-            query=payload.query,
-            response=response,
-            confusion_type="NO_CONFUSION",
-            evaluation=None,
-        )
-        print(f"⚠️ Agent not found for subject '{payload.subject}'. Performance tracking skipped.")
+        additional_data["subject_agent_id"] = agent_id
 
+    conversation_id = conversation_manager.add_conversation(
+        student_id=payload.student_id,
+        subject=payload.subject,
+        query=payload.query,
+        response=response,
+        confusion_type="NO_CONFUSION",
+        evaluation=None,
+        additional_data=additional_data
+    )
     return {
         "response": response,
         "profile": profile,
         "evaluation": None,
         "conversation_id": str(conversation_id),
     }
-

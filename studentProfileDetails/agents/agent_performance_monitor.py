@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 import logging
 
 # Import cache
-from routes.performance_cache import performance_cache
+from routes.performance.cache import performance_cache
 
 load_dotenv()
 

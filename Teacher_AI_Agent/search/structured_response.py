@@ -14,7 +14,6 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-
 # -----------------------------
 # Pydantic model for student profile (subject_preferences schema; all keys stored in DB, used in prompt)
 # -----------------------------
