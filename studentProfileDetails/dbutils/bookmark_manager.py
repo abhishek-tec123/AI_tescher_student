@@ -208,6 +208,7 @@ class BookmarkManager:
         if bookmark:
             return {
                 "bookmark_id": str(bookmark["_id"]),
+                "student_id": bookmark["student_id"],
                 "conversation_id": bookmark["conversation_id"],
                 "subject": bookmark["subject"],
                 "original_query": bookmark["original_query"],

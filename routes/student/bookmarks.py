@@ -4,8 +4,8 @@ Handles recent activity, learning progress, and bookmarks
 """
 
 from fastapi import APIRouter, Depends, Query, HTTPException
-from studentProfileDetails.dbutils import StudentManager, ConversationManager
-from studentProfileDetails.dependencies import StudentManagerDep, get_conversation_manager
+from studentProfileDetails.dbutils import StudentManager, ConversationManager, BookmarkManager
+from studentProfileDetails.dependencies import StudentManagerDep, BookmarkManagerDep, get_conversation_manager
 from studentProfileDetails.auth.dependencies import get_current_user
 from pydantic import BaseModel
 from typing import Optional, List
@@ -114,7 +114,7 @@ def get_student_recent_activity(
 def create_bookmark(
     student_id: str,
     payload: BookmarkRequest,
-    student_manager: StudentManager = StudentManagerDep,
+    bookmark_manager: BookmarkManager = BookmarkManagerDep,
     current_user: dict = Depends(get_current_user)
 ):
     """
@@ -126,7 +126,7 @@ def create_bookmark(
         raise HTTPException(status_code=403, detail="Access denied: You can only bookmark your own conversations")
     
     try:
-        bookmark_id = student_manager.add_bookmark(
+        bookmark_id = bookmark_manager.add_bookmark(
             student_id=student_id,
             conversation_id=payload.conversation_id,
             subject=payload.subject,
@@ -147,7 +147,7 @@ def get_student_bookmarks(
     student_id: str,
     page: int = Query(1, ge=1, description="Page number"),
     limit: int = Query(10, ge=1, le=100, description="Number of bookmarks per page"),
-    student_manager: StudentManager = StudentManagerDep,
+    bookmark_manager: BookmarkManager = BookmarkManagerDep,
     current_user: dict = Depends(get_current_user)
 ):
     """
@@ -159,7 +159,7 @@ def get_student_bookmarks(
         raise HTTPException(status_code=403, detail="Access denied: You can only access your own bookmarks")
     
     try:
-        bookmark_data = student_manager.get_student_bookmarks(
+        bookmark_data = bookmark_manager.get_student_bookmarks(
             student_id=student_id,
             page=page,
             limit=limit
@@ -173,7 +173,7 @@ def get_student_bookmarks(
 def update_bookmark(
     bookmark_id: str,
     payload: BookmarkUpdate,
-    student_manager: StudentManager = StudentManagerDep,
+    bookmark_manager: BookmarkManager = BookmarkManagerDep,
     current_user: dict = Depends(get_current_user)
 ):
     """
@@ -181,16 +181,19 @@ def update_bookmark(
     Students can only update their own bookmarks.
     """
     try:
-        # Verify bookmark belongs to current user
-        bookmark = student_manager.db.bookmarks.find_one({
-            "_id": ObjectId(bookmark_id),
-            "student_id": current_user["user_id"]
-        })
+        # First check if bookmark exists at all (without student validation)
+        bookmark_exists = bookmark_manager.get_bookmark_by_id(bookmark_id)
         
-        if not bookmark:
+        if not bookmark_exists:
             raise HTTPException(status_code=404, detail="Bookmark not found")
         
-        success = student_manager.update_bookmark_notes(
+        # Now verify bookmark belongs to current user
+        bookmark = bookmark_manager.get_student_bookmark_by_id(bookmark_id, current_user["user_id"])
+        
+        if not bookmark:
+            raise HTTPException(status_code=403, detail="Access denied: Bookmark belongs to another student")
+        
+        success = bookmark_manager.update_bookmark_notes(
             bookmark_id=bookmark_id,
             student_id=current_user["user_id"],
             personal_notes=payload.personal_notes
@@ -209,7 +212,7 @@ def update_bookmark(
 @router.delete("/bookmarks/{bookmark_id}")
 def delete_bookmark(
     bookmark_id: str,
-    student_manager: StudentManager = StudentManagerDep,
+    bookmark_manager: BookmarkManager = BookmarkManagerDep,
     current_user: dict = Depends(get_current_user)
 ):
     """
@@ -217,16 +220,19 @@ def delete_bookmark(
     Students can only delete their own bookmarks.
     """
     try:
-        # Verify bookmark belongs to current user
-        bookmark = student_manager.db.bookmarks.find_one({
-            "_id": ObjectId(bookmark_id),
-            "student_id": current_user["user_id"]
-        })
+        # First check if bookmark exists at all (without student validation)
+        bookmark_exists = bookmark_manager.get_bookmark_by_id(bookmark_id)
         
-        if not bookmark:
+        if not bookmark_exists:
             raise HTTPException(status_code=404, detail="Bookmark not found")
         
-        success = student_manager.delete_bookmark(
+        # Now verify bookmark belongs to current user
+        bookmark = bookmark_manager.get_student_bookmark_by_id(bookmark_id, current_user["user_id"])
+        
+        if not bookmark:
+            raise HTTPException(status_code=403, detail="Access denied: Bookmark belongs to another student")
+        
+        success = bookmark_manager.delete_bookmark(
             bookmark_id=bookmark_id,
             student_id=current_user["user_id"]
         )
