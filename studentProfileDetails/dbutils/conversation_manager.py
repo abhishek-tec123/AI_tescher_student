@@ -40,7 +40,8 @@ class ConversationManager:
         evaluation: Optional[Dict] = None,
         quality_scores: Optional[Dict] = None,
         additional_data: Optional[Dict] = None,
-        agent_id: Optional[str] = None
+        agent_id: Optional[str] = None,
+        chat_session_id: Optional[str] = None
     ) -> str:
         """
         Add a conversation entry for a student and subject.
@@ -56,6 +57,7 @@ class ConversationManager:
             quality_scores: Optional quality assessment scores
             additional_data: Additional metadata (e.g., subject_agent_id)
             agent_id: Optional agent identifier for performance tracking
+            chat_session_id: Optional chat session identifier for session management
             
         Returns:
             Conversation ID as string
@@ -75,6 +77,9 @@ class ConversationManager:
             "confusion_type": confusion_type,
             "timestamp": timestamp
         }
+
+        if chat_session_id is not None:
+            conversation_doc["chat_session_id"] = chat_session_id
 
         if agent_id is not None:
             conversation_doc["agent_id"] = agent_id
@@ -364,6 +369,97 @@ class ConversationManager:
             "unique_agents": unique_agents_list
         }
     
+    def update_conversation(
+        self,
+        conversation_id: str,
+        additional_data: Optional[Dict[str, Any]] = None
+    ) -> int:
+        """
+        Update an existing conversation with additional data.
+        
+        Args:
+            conversation_id: Conversation identifier
+            additional_data: Additional data to add to the conversation
+            
+        Returns:
+            Number of modified documents
+        """
+        if additional_data:
+            update_doc = {"$set": {}}
+            for key, value in additional_data.items():
+                update_doc["$set"][f"additional_data.{key}"] = value
+            
+            # Find the conversation by checking all subject arrays
+            result = self.students.update_one(
+                {"conversation_history.$[].conversation_id": conversation_id},
+                update_doc
+            )
+            return result.modified_count
+        return 0
+
+    def get_conversations_by_chat_session(
+        self,
+        student_id: str,
+        chat_session_id: str,
+        limit: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Get conversation history for a specific chat session.
+        
+        Args:
+            student_id: Student identifier
+            chat_session_id: Chat session identifier
+            limit: Optional maximum number of conversations to return
+            
+        Returns:
+            List of conversation documents sorted by timestamp (newest first)
+        """
+        doc = self.students.find_one(
+            {"student_id": student_id},
+            {"conversation_history": 1}
+        )
+
+        if not doc:
+            return []
+
+        conversation_history = doc.get("conversation_history", {})
+        session_conversations = []
+
+        # Collect all conversations for this chat session
+        for subject, conversations in conversation_history.items():
+            for conv in conversations:
+                if conv.get("chat_session_id") == chat_session_id:
+                    conv_copy = conv.copy()
+                    conv_copy["subject"] = subject
+                    session_conversations.append(conv_copy)
+
+        # Sort by timestamp (newest first)
+        session_conversations.sort(
+            key=lambda x: x.get("timestamp", datetime.min),
+            reverse=True
+        )
+
+        # Apply limit if provided
+        if limit is not None:
+            session_conversations = session_conversations[:limit]
+
+        # Serialize Mongo types
+        return [
+            {
+                "_id": str(conv["_id"]),
+                "chat_session_id": conv.get("chat_session_id"),
+                "subject": conv.get("subject"),
+                "query": conv.get("query", ""),
+                "response": conv.get("response", ""),
+                "feedback": conv.get("feedback", "neutral"),
+                "confusion_type": conv.get("confusion_type", "NO_CONFUSION"),
+                "timestamp": conv["timestamp"].isoformat() if conv.get("timestamp") else None,
+                "evaluation": conv.get("evaluation", {}),
+                "agent_id": conv.get("agent_id")
+            }
+            for conv in session_conversations
+        ]
+
     def get_conversation_by_id(self, conversation_id: str, student_id: str) -> Optional[Dict[str, Any]]:
         """
         Fetch a specific conversation by ID from existing conversation_history structure.

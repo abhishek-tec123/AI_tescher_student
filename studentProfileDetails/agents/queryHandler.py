@@ -64,6 +64,9 @@ def check_student_exists_cached(student_id, student_manager):
 def update_performance_background(student_manager, student_id, subject, query, response, evolution_scores):
     """Background function to update performance metrics asynchronously."""
     try:
+        from studentProfileDetails.dbutils import ConversationManager
+        conversation_manager = ConversationManager()
+        
         agent_id = get_dynamic_agent_id_for_subject(student_manager, student_id, subject)
         additional_data = {}
         if agent_id:
@@ -162,7 +165,8 @@ def queryRouter(
             payload=payload,
             profile=profile,
             context=session_context,
-            preference_manager=preference_manager  # Pass preference_manager parameter
+            preference_manager=preference_manager,  # Pass preference_manager parameter
+            chat_session_id=getattr(payload, 'chat_session_id', None)  # Pass chat_session_id
         )
 
         response = result["response"]
@@ -174,8 +178,8 @@ def queryRouter(
             "response": response,
             "conversation_id": conversation_id,
             "evaluation": evolution_scores,
-            "profile": result.get("profile", profile),  # Use returned profile or original
-            "context_summary": result.get("context_summary"),
+            # "profile": result.get("profile", profile),  # Use returned profile or original
+            # "context_summary": result.get("context_summary"),  # Fetch stored summary
             "status": "success"
         }
 
@@ -222,6 +226,9 @@ def queryRouter(
     # QUIZ
     # =============================
     elif intent == "QUIZ":
+        # Initialize conversation manager for quiz operations
+        conversation_manager = ConversationManager()
+        
         # Fetch stored conversation history from MongoDB
         stored_history = conversation_manager.get_chat_history_by_agent(
             student_id=payload.student_id,
@@ -293,7 +300,8 @@ def queryRouter(
                         subject=payload.subject,
                         query=quiz_start_entry["query"],
                         response=quiz_start_entry["response"],
-                        additional_data=additional_data
+                        additional_data=additional_data,
+                        chat_session_id=getattr(payload, 'chat_session_id', None)  # Add chat_session_id if available
                     )
                     
                     if agent_id:
@@ -331,6 +339,12 @@ def queryRouter(
         # 🚀 Start background conversation storage for study plan
         def store_study_plan_background():
             try:
+                from studentProfileDetails.dbutils import ConversationManager
+                conversation_manager = ConversationManager()
+                
+                # Get agent ID for performance tracking
+                agent_id = get_dynamic_agent_id_for_subject(student_manager, payload.student_id, payload.subject)
+                
                 additional_data = {
                     "study_plan_action": "generated",
                     "topic": topic,
@@ -397,6 +411,12 @@ def queryRouter(
         # 🚀 Start background conversation storage for notes
         def store_notes_background():
             try:
+                from studentProfileDetails.dbutils import ConversationManager
+                conversation_manager = ConversationManager()
+                
+                # Get agent ID for performance tracking
+                agent_id = get_dynamic_agent_id_for_subject(student_manager, payload.student_id, payload.subject)
+                
                 additional_data = {
                     "notes_action": "generated",
                     "topic": topic,
@@ -470,6 +490,12 @@ def queryRouter(
         # 🚀 Start background conversation storage for summary
         def store_summary_background():
             try:
+                from studentProfileDetails.dbutils import ConversationManager
+                conversation_manager = ConversationManager()
+                
+                # Get agent ID for performance tracking
+                agent_id = get_dynamic_agent_id_for_subject(student_manager, payload.student_id, payload.subject)
+                
                 additional_data = {
                     "summary_action": "generated",
                     "topic": topic,

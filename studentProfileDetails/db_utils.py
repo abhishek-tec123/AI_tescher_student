@@ -20,7 +20,8 @@ from .dbutils import (
     ConversationManager,
     BookmarkManager,
     PreferenceManager,
-    AuthManager
+    AuthManager,
+    ChatSessionManager
 )
 
 # Import constants and utilities
@@ -43,6 +44,7 @@ __all__ = [
     'BookmarkManager',
     'PreferenceManager',
     'AuthManager',
+    'ChatSessionManager',
     'MONGO_URI',
     'DB_NAME',
     'COLLECTION_NAME',

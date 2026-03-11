@@ -24,6 +24,7 @@ def handle_chat_intent(
     profile,
     context,
     preference_manager,  # Add preference_manager parameter
+    chat_session_id=None,  # Add chat_session_id parameter
 ):
     # -----------------------------------------
     # Greeting
@@ -73,12 +74,31 @@ def handle_chat_intent(
     rl_metadata = chat.get("rl_metadata", {})
 
     # -----------------------------------------
+    # STORE CONVERSATION IMMEDIATELY for conversation_id
+    # -----------------------------------------
+    conversation_manager = ConversationManager()
+    
+    # Store conversation immediately to get conversation_id
+    conversation_id = conversation_manager.add_conversation(
+        student_id=payload.student_id,
+        subject=payload.subject,
+        query=payload.query,
+        response=response,  # Store actual response
+        feedback="neutral",  # Default feedback
+        confusion_type=confusion_type or "NO_CONFUSION",
+        evaluation=None,
+        additional_data={},
+        chat_session_id=chat_session_id  # Add chat_session_id
+    )
+    
+    print(f"📝 Conversation stored immediately with ID: {conversation_id}")
+    
+    # -----------------------------------------
     # IMMEDIATE RESPONSE PRIORITY: Return LLM response first
     # -----------------------------------------
     
     # Return immediate response with original profile (faster!)
     try:
-        conversation_manager = ConversationManager()
         context_summary = conversation_manager.get_subject_summary(payload.student_id, payload.subject)
     except Exception as e:
         print(f"⚠️ Failed to fetch existing summary in handle_chat_intent: {e}")
@@ -88,7 +108,7 @@ def handle_chat_intent(
         "response": response,
         "profile": profile,  # Return original profile for speed
         "evaluation": {"status": "processing"},  # Placeholder evaluation
-        "conversation_id": None,  # Will be set in background
+        "conversation_id": conversation_id,  # Now has actual ID
         "context_summary": context_summary,  # Add context summary to response
     }
 
@@ -107,7 +127,7 @@ def handle_chat_intent(
             )
             print("📊 Background profile update completed")
             
-            # 2️⃣ Store conversation with complete data
+            # 2️⃣ Update conversation with additional data
             agent_id = get_dynamic_agent_id_for_subject(student_manager, payload.student_id, payload.subject)
             
             # Prepare additional data including rl_metadata
@@ -117,21 +137,16 @@ def handle_chat_intent(
             if rl_metadata:
                 additional_data["rl_metadata"] = rl_metadata
             
-            conversation_id = conversation_manager.add_conversation(
-                student_id=payload.student_id,
-                subject=payload.subject,
-                query=payload.query,
-                response=response,  # Store actual response
-                feedback="neutral",  # Default feedback
-                confusion_type=confusion_type or "NO_CONFUSION",
-                evaluation=None,
+            # Update the existing conversation with additional data
+            conversation_manager.update_conversation(
+                conversation_id=conversation_id,
                 additional_data=additional_data
             )
             
             if agent_id:
-                print(f"📝 Background conversation stored with ID: {conversation_id} (agent: {agent_id})")
+                print(f"📝 Background conversation updated with agent: {agent_id}")
             else:
-                print(f"⚠️ Background conversation stored - Agent not found for subject '{payload.subject}'")
+                print(f"⚠️ Background conversation updated - Agent not found for subject '{payload.subject}'")
             
             # 3️⃣ Evaluate academic response (moved to background)
             evaluation = evaluate_response(

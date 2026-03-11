@@ -10,7 +10,8 @@ from studentProfileDetails.dbutils import (
     ConversationManager,
     BookmarkManager,
     PreferenceManager,
-    AuthManager
+    AuthManager,
+    ChatSessionManager
 )
 
 
@@ -39,9 +40,15 @@ def get_auth_manager() -> AuthManager:
     return AuthManager()
 
 
+def get_chat_session_manager() -> ChatSessionManager:
+    """Dependency provider for ChatSessionManager."""
+    return ChatSessionManager()
+
+
 # Create dependency instances for use in routes
 StudentManagerDep = Depends(get_student_manager)
 ConversationManagerDep = Depends(get_conversation_manager)
 BookmarkManagerDep = Depends(get_bookmark_manager)
 PreferenceManagerDep = Depends(get_preference_manager)
 AuthManagerDep = Depends(get_auth_manager)
+ChatSessionManagerDep = Depends(get_chat_session_manager)

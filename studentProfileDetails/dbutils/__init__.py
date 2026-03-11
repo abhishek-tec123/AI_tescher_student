@@ -20,6 +20,7 @@ from .conversation_manager import ConversationManager
 from .bookmark_manager import BookmarkManager
 from .preference_manager import PreferenceManager
 from .auth_manager import AuthManager
+from .chat_session_manager import ChatSessionManager
 
 __all__ = [
     'DatabaseConnection',
@@ -27,7 +28,8 @@ __all__ = [
     'ConversationManager',
     'BookmarkManager',
     'PreferenceManager',
-    'AuthManager'
+    'AuthManager',
+    'ChatSessionManager'
 ]
 
 __version__ = "1.0.0"
