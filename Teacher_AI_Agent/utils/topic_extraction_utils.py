@@ -219,18 +219,27 @@ Analyze the following educational content and extract the main topics and subtop
 Instructions:
 1. Identify the main topics covered in this content
 2. For each main topic, identify relevant subtopics if requested
-3. Return the results in a structured JSON format
-4. Focus on academic/educational topics that would be part of a syllabus
-5. Assign confidence scores (0.0-1.0) based on how clearly the topic is covered
+3. **IMPORTANT**: Extract 1-2 line descriptions directly from the content for each topic and subtopic
+   - Find actual sentences or phrases in the text that describe the topic/subtopic
+   - Do NOT generate descriptions from general knowledge - they must come from the content
+   - Keep descriptions concise (1-2 lines maximum)
+4. Return the results in a structured JSON format
+5. Focus on academic/educational topics that would be part of a syllabus
+6. Assign confidence scores (0.0-1.0) based on how clearly the topic is covered
 
 Format your response as valid JSON:
 {{
   "topics": [
     {{
       "topic": "Main Topic Name",
+      "description": "1-2 line description extracted directly from the content text",
       "confidence": 0.95,
       "subtopics": [
-        {{"subtopic": "Subtopic Name", "confidence": 0.88}}
+        {{
+          "subtopic": "Subtopic Name", 
+          "description": "1-2 line description extracted directly from the content",
+          "confidence": 0.88
+        }}
       ] if include_subtopics else []
     }}
   ]
@@ -260,6 +269,7 @@ def organize_topics_hierarchy(
             continue
 
         confidence = topic_data.get("confidence", 0)
+        description = topic_data.get("description", "")
         subtopics = topic_data.get("subtopics", [])
 
         found = False
@@ -271,10 +281,28 @@ def organize_topics_hierarchy(
                 existing = topic_groups[existing_topic]
 
                 existing["confidence"] = max(existing["confidence"], confidence)
+                
+                # Merge descriptions - keep the most detailed one from content
+                if description and (not existing.get("description") or len(description) > len(existing.get("description", ""))):
+                    existing["description"] = description
 
                 for sub in subtopics:
-                    if sub not in existing["subtopics"]:
-                        existing["subtopics"].append(sub)
+                    sub_name = sub.get("subtopic", "").strip()
+                    if sub_name:
+                        # Check if subtopic already exists
+                        existing_sub_found = False
+                        for existing_sub in existing["subtopics"]:
+                            if are_topics_similar(sub_name, existing_sub.get("subtopic", "")):
+                                # Merge subtopic descriptions
+                                sub_desc = sub.get("description", "")
+                                if sub_desc and (not existing_sub.get("description") or len(sub_desc) > len(existing_sub.get("description", ""))):
+                                    existing_sub["description"] = sub_desc
+                                existing_sub["confidence"] = max(existing_sub["confidence"], sub.get("confidence", 0))
+                                existing_sub_found = True
+                                break
+                        
+                        if not existing_sub_found:
+                            existing["subtopics"].append(sub)
 
                 found = True
                 break
@@ -283,6 +311,7 @@ def organize_topics_hierarchy(
 
             topic_groups[topic_name] = {
                 "topic": topic_name,
+                "description": description,
                 "confidence": confidence,
                 "subtopics": subtopics
             }
