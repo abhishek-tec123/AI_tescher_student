@@ -490,9 +490,9 @@ class ConversationManager:
                 "query": conv.get("query", ""),
                 "response": conv.get("response", ""),
                 "feedback": conv.get("feedback", "neutral"),
-                "confusion_type": conv.get("confusion_type", "NO_CONFUSION"),
+                # "confusion_type": conv.get("confusion_type", "NO_CONFUSION"),
                 "timestamp": conv["timestamp"].isoformat() if conv.get("timestamp") else None,
-                "evaluation": conv.get("evaluation", {}),
+                # "evaluation": conv.get("evaluation", {}),
                 "agent_id": conv.get("subject_agent_id")
             }
             for conv in session_conversations
@@ -536,7 +536,7 @@ class ConversationManager:
                         "response": convo.get("response", ""),
                         "timestamp": convo.get("timestamp"),
                         "feedback": convo.get("feedback", "neutral"),
-                        "evaluation": convo.get("evaluation", {})
+                        # "evaluation": convo.get("evaluation", {})
                     }
         
         return None
