@@ -10,3 +10,7 @@ data/
 cheking/
 get-pip.py
 embeddings.json
+data/
+.md/
+DS_Store
+storage/
