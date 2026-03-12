@@ -3,6 +3,9 @@ from studentProfileDetails.generate_response_with_groq import generate_response_
 from studentProfileDetails.dbutils import ConversationManager  # ✅ Import dynamic agent ID mapping
 from studentProfileDetails.prompt_templates import detect_formal_communication  # ✅ Import formal detection from modular templates
 from studentProfileDetails.agents.mainAgent import get_agent_metadata  # ✅ Import agent metadata from mainAgent
+from studentProfileDetails.utils.agent_utils import get_dynamic_agent_id_for_subject
+from studentProfileDetails.prompt_templates import detect_formal_communication
+from studentProfileDetails.agents.mainAgent import get_agent_metadata
 
 def is_greeting(query: str) -> bool:
     q = query.lower().strip()
@@ -157,7 +160,7 @@ def handle_general_chat_llm(
     if agent_id:
         additional_data["subject_agent_id"] = agent_id
 
-    conversation_id = conversation_manager.add_conversation(
+    conversation_id = ConversationManager().add_conversation(
         student_id=payload.student_id,
         subject=payload.subject,
         query=payload.query,

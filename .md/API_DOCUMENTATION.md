@@ -571,6 +571,14 @@ GET /student/{student_id}/shared-documents/{document_id}
 -------------------------------------
 GET /student/{student_id}/shared-documents/{document_id}/preview
 
+17.7 get all unique document id for agent id for preview
+-------------------------------------
+post /student/documents/agent-documents
+
+Request Body:
+{
+  "agent_id": "agent_id",
+}
 ============================================================
 REQUEST BODY CATEGORIES SUMMARY
 ============================================================

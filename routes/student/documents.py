@@ -35,6 +35,14 @@ class DocumentListResponse(BaseModel):
     total_pages: int
     agent_id: str
 
+class AgentDocumentRequest(BaseModel):
+    agent_id: str
+
+class AgentDocumentIdsResponse(BaseModel):
+    agent_id: str
+    doc_unique_ids: List[str]
+    total_count: int
+
 def get_student_agent_ids(student_id: str) -> List[str]:
     """
     Get list of agent IDs that a student has access to
@@ -530,6 +538,42 @@ def preview_shared_document(
     except Exception as e:
         print(f"Error previewing shared document: {e}")
         raise HTTPException(status_code=500, detail="Failed to preview shared document")
+
+@router.post("/documents/agent-documents", response_model=AgentDocumentIdsResponse)
+def get_agent_document_ids(
+    request: AgentDocumentRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get all doc_unique_id values for a specific agent
+    Accepts agent_id in request body and returns list of document IDs
+    """
+    agent_id = request.agent_id
+    
+    # Basic validation
+    if not agent_id or not agent_id.strip():
+        raise HTTPException(status_code=400, detail="agent_id is required")
+    
+    try:
+        # Get all documents for the agent using existing function
+        all_documents = get_agent_documents_from_db(agent_id)
+        
+        # Extract only the doc_unique_id values
+        doc_unique_ids = []
+        for doc in all_documents:
+            document_id = doc.get("document_id")
+            if document_id:
+                doc_unique_ids.append(document_id)
+        
+        return AgentDocumentIdsResponse(
+            agent_id=agent_id,
+            doc_unique_ids=doc_unique_ids,
+            total_count=len(doc_unique_ids)
+        )
+        
+    except Exception as e:
+        print(f"Error getting agent document IDs: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve document IDs")
 
 @router.get("/{student_id}/documents/storage-info")
 def get_storage_info(
