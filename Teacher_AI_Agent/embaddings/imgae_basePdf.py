@@ -51,27 +51,68 @@ def extract_img_pdf_text_parallel(pdf_path):
     pdf.close()
 
     logger.info(f"Starting extraction for {total_pages} pages")
-    logger.info(f"Using {os.cpu_count()} CPU cores")
+    
+    # Limit workers to prevent system overload
+    max_workers = min(os.cpu_count(), 4)  # Cap at 4 workers
+    logger.info(f"Using {max_workers} CPU cores (limited from {os.cpu_count()})")
 
     results = [""] * total_pages
 
-    with ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
-        futures = [
-            executor.submit(_process_pdf_page, (pdf_path, i))
-            for i in range(total_pages)
-        ]
+    try:
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = [
+                executor.submit(_process_pdf_page, (pdf_path, i))
+                for i in range(total_pages)
+            ]
 
-        for future in as_completed(futures):
-            page_number, text, method, duration = future.result()
-            results[page_number] = text
+            for future in as_completed(futures, timeout=300):  # 5 minute timeout
+                try:
+                    page_number, text, method, duration = future.result(timeout=60)  # 1 minute per page
+                    results[page_number] = text
 
-            logger.info(
-                f"Page {page_number + 1} | Method: {method} | Time: {duration}s"
-            )
+                    logger.info(
+                        f"Page {page_number + 1} | Method: {method} | Time: {duration}s"
+                    )
+                except Exception as e:
+                    logger.error(f"Error processing page: {e}")
+                    # Continue with other pages even if one fails
+                    continue
+
+    except Exception as e:
+        logger.error(f"Multiprocessing failed: {e}")
+        # Fallback to sequential processing
+        logger.info("Falling back to sequential processing...")
+        return extract_img_pdf_text_sequential(pdf_path)
 
     total_time = round(time.time() - total_start, 2)
     logger.info(f"Extraction completed in {total_time} seconds")
 
+    return "\n".join(results)
+
+
+def extract_img_pdf_text_sequential(pdf_path):
+    """Fallback sequential processing for when multiprocessing fails."""
+    logger.info("Using sequential PDF processing")
+    total_start = time.time()
+    
+    pdf = fitz.open(pdf_path)
+    total_pages = len(pdf)
+    results = []
+    
+    for page_num in range(total_pages):
+        try:
+            page_number, text, method, duration = _process_pdf_page((pdf_path, page_num))
+            results.append(text)
+            logger.info(f"Page {page_number + 1} | Method: {method} | Time: {duration}s")
+        except Exception as e:
+            logger.error(f"Error processing page {page_num + 1}: {e}")
+            results.append("")  # Add empty string for failed pages
+    
+    pdf.close()
+    
+    total_time = round(time.time() - total_start, 2)
+    logger.info(f"Sequential extraction completed in {total_time} seconds")
+    
     return "\n".join(results)
 
 

@@ -1,6 +1,8 @@
 import os
 import tempfile
 import logging
+import mimetypes
+import glob
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from fastapi import UploadFile, HTTPException
@@ -67,12 +69,24 @@ class SharedKnowledgeManager:
         # Process files
         file_inputs = []
         original_filenames = []
+        storage_paths = []  # Add storage paths tracking
+        
+        # Generate unique document ID first so we can use it for filename
+        document_id = f"shared_doc_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{len(files)}"
         
         for file in files:
             if not file or not file.filename:
                 continue
             
             suffix = os.path.splitext(file.filename)[-1] or ".tmp"
+            
+            # Create permanent storage file (not temporary)
+            storage_dir = os.path.join("storage", "shared")
+            os.makedirs(storage_dir, exist_ok=True)
+            
+            # Use document_id for filename (clean version)
+            clean_filename = f"{document_id}{suffix}"
+            storage_path = os.path.join(storage_dir, clean_filename)
             
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                 content = file.file.read()
@@ -83,12 +97,14 @@ class SharedKnowledgeManager:
                 tmp.write(content)
                 file_inputs.append(tmp.name)
                 original_filenames.append(file.filename)
+                
+                # Also save permanent copy for preview
+                with open(storage_path, 'wb') as permanent_file:
+                    permanent_file.write(content)
+                storage_paths.append(storage_path)
         
         if not file_inputs:
             raise HTTPException(status_code=400, detail="No valid files to process")
-        
-        # Generate unique document ID
-        document_id = f"shared_doc_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{len(file_inputs)}"
         
         # Create vectors and store in shared collection
         try:
@@ -121,12 +137,14 @@ class SharedKnowledgeManager:
                         "indexed_chunks": result.get("inserted_chunks", 0),
                         "total_chunks": result.get("num_chunks", 0),
                         "file_names": result.get("file_names", []),
-                        "used_by_agents": []
+                        "used_by_agents": [],
+                        "storage_path": storage_paths[0] if storage_paths else None,  # Save first file path for preview
+                        "preview_available": len(storage_paths) > 0
                     }
                 }
             )
             
-            # Clean up temporary files
+            # Clean up temporary files (but keep permanent storage files)
             for file_path in file_inputs:
                 try:
                     os.unlink(file_path)
@@ -200,7 +218,7 @@ class SharedKnowledgeManager:
                     size_str = f"{total_size / 1024:.1f} KB"
                 
                 documents.append({
-                    "document_id": doc["_id"],
+                    "document_id": str(doc["_id"]),  # Convert ObjectId to string
                     "document_name": doc["document_name"],
                     "description": doc.get("description", ""),
                     "upload_date": doc["upload_date"],
@@ -230,13 +248,46 @@ class SharedKnowledgeManager:
     def delete_shared_document(self, document_id: str) -> Dict[str, Any]:
         """Delete a shared knowledge document."""
         try:
-            # Check if document exists
-            doc = self.collection.find_one({"document_id": document_id})
+            # Store the original input for logging
+            original_input = document_id
+            
+            # Check if document exists - try both _id and doc_unique_id
+            doc = self.collection.find_one({"_id": document_id})
+            
+            # If not found by _id, try by document_id field
             if not doc:
+                doc = self.collection.find_one({"document_id": document_id})
+                if doc:
+                    # Use the actual document_id field value for deletion
+                    document_id = doc["document_id"]
+            
+            # If still not found, try by doc_unique_id
+            if not doc:
+                doc = self.collection.find_one({"document.doc_unique_id": original_input})
+                if doc:
+                    # Use the actual document_id field value for deletion
+                    document_id = doc["document_id"]
+            
+            if not doc:
+                # Debug: log what we're looking for
+                logger.error(f"Document not found. Tried _id={original_input}, document_id={original_input}, doc_unique_id={original_input}")
                 raise HTTPException(status_code=404, detail="Document not found")
             
-            # Delete all chunks for this document
+            # Delete ALL chunks for this document using document_id field (not _id)
+            # All chunks share the same document_id, so we delete by that field
             result = self.collection.delete_many({"document_id": document_id})
+            
+            # If no chunks found by document_id, try doc_unique_id
+            if result.deleted_count == 0:
+                result = self.collection.delete_many({"document.doc_unique_id": original_input})
+            
+            # Clean up storage files if they exist
+            if doc and doc.get("storage_path") and os.path.exists(doc["storage_path"]):
+                try:
+                    os.remove(doc["storage_path"])
+                    logger.info(f"Deleted storage file: {doc['storage_path']}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete storage file {doc['storage_path']}: {e}")
             
             logger.info(f"Deleted shared document {document_id}: {result.deleted_count} chunks")
             
@@ -244,7 +295,7 @@ class SharedKnowledgeManager:
                 "status": "success",
                 "message": f"Document '{doc.get('document_name', document_id)}' deleted successfully",
                 "deleted_chunks": result.deleted_count,
-                "document_id": document_id
+                "document_id": str(document_id)  # Convert ObjectId to string
             }
             
         except Exception as e:
@@ -384,6 +435,202 @@ class SharedKnowledgeManager:
         except Exception as e:
             logger.error(f"Failed to get enabled documents for agent {agent_id}: {e}")
             return []
+    
+    def get_shared_document_file_path(self, document_id: str) -> Optional[str]:
+        """Get the file path for a shared document for preview."""
+        try:
+            # First try to find by document_id field (most common case)
+            doc = self.collection.find_one({"document_id": document_id})
+            
+            # If not found, try by _id field (some cases)
+            if not doc:
+                doc = self.collection.find_one({"_id": document_id})
+            
+            # If still not found, try by doc_unique_id in the document object
+            if not doc:
+                doc = self.collection.find_one({"document.doc_unique_id": document_id})
+            
+            if not doc:
+                return None
+            
+            # Check if storage path is available in document metadata
+            storage_path = doc.get("storage_path")
+            if storage_path and os.path.exists(storage_path):
+                return storage_path
+            
+            # If no direct storage path, try to find file by pattern matching
+            storage_dir = os.path.join("storage", "shared")
+            if os.path.exists(storage_dir):
+                # Try to find exact file with document_id + extension
+                
+                # First try exact match with document_id
+                for ext in ['.pdf', '.docx', '.doc', '.txt', '.html', '.csv', '.json']:
+                    pattern = os.path.join(storage_dir, f"{document_id}{ext}")
+                    if os.path.exists(pattern):
+                        logger.info(f"Found exact file: {pattern}")
+                        return pattern
+                
+                # Then try pattern matching with document_id
+                pattern = os.path.join(storage_dir, f"{document_id}*")
+                matching_files = glob.glob(pattern)
+                
+                if matching_files:
+                    logger.info(f"Found file by pattern matching: {matching_files[0]}")
+                    return matching_files[0]
+                
+                # If not found, try to find the most recent shared document file
+                # This handles cases where there might be timestamp mismatches
+                all_shared_files = glob.glob(os.path.join(storage_dir, "shared_doc_*.pdf"))
+                if all_shared_files:
+                    # Sort by modification time, get the most recent
+                    all_shared_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+                    logger.info(f"Using most recent shared document file: {all_shared_files[0]}")
+                    return all_shared_files[0]
+                
+                # Also try with doc_unique_id if available
+                doc_unique_id = doc.get("document", {}).get("doc_unique_id", "")
+                if doc_unique_id:
+                    pattern = os.path.join(storage_dir, f"*{doc_unique_id}*")
+                    matching_files = glob.glob(pattern)
+                    if matching_files:
+                        logger.info(f"Found file by doc_unique_id pattern: {matching_files[0]}")
+                        return matching_files[0]
+            
+            # If no direct storage path, we need to reconstruct from file storage
+            # This is a fallback - in practice, shared documents might not store original files
+            # Only the embedded chunks
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Failed to get file path for shared document {document_id}: {e}")
+            return None
+    
+    def get_shared_document_metadata(self, document_id: str) -> Optional[Dict[str, Any]]:
+        """Get detailed metadata for a specific shared document."""
+        try:
+            # First try to find by document_id field (most common case)
+            doc = self.collection.find_one({"document_id": document_id})
+            
+            # If not found, try by _id field (some cases)
+            if not doc:
+                doc = self.collection.find_one({"_id": document_id})
+            
+            # If still not found, try by doc_unique_id in the document object
+            if not doc:
+                doc = self.collection.find_one({"document.doc_unique_id": document_id})
+            
+            if not doc:
+                return None
+            
+            # Get file path for additional info
+            storage_path = self.get_shared_document_file_path(document_id)
+            storage_info = None
+            
+            if storage_path:
+                try:
+                    file_stat = os.stat(storage_path)
+                    storage_info = {
+                        "file_exists": True,
+                        "file_size": file_stat.st_size,
+                        "last_modified": file_stat.st_mtime,
+                        "mime_type": mimetypes.guess_type(storage_path)[0] or "application/octet-stream"
+                    }
+                except Exception as e:
+                    storage_info = {"file_exists": False, "error": str(e)}
+            else:
+                storage_info = {"file_exists": False, "message": "Original file not stored"}
+            
+            return {
+                "document_id": str(doc["_id"]),  # Convert ObjectId to string
+                "doc_unique_id": doc.get("document", {}).get("doc_unique_id", ""),
+                "document_name": doc["document_name"],
+                "description": doc.get("description", ""),
+                "upload_date": doc["upload_date"],
+                "status": doc.get("status", "pending"),
+                "indexed_chunks": doc.get("indexed_chunks", 0),
+                "total_chunks": doc.get("total_chunks", 0),
+                "file_names": doc.get("file_names", []),
+                "used_by_agents": doc.get("used_by_agents", []),
+                "storage_path": storage_path,
+                "storage_info": storage_info,
+                "preview_available": storage_path is not None
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get metadata for shared document {document_id}: {e}")
+            return None
+    
+    def remove_agent_from_shared_documents(self, agent_id: str) -> dict:
+        """
+        Remove an agent from all shared documents and optionally clean up unused shared files
+        
+        Args:
+            agent_id: Agent identifier to remove
+            
+        Returns:
+            Dict with removal statistics
+        """
+        try:
+            # Find all shared documents that use this agent
+            shared_docs = list(self.collection.find({"used_by_agents.agent_id": agent_id}))
+            
+            documents_updated = 0
+            documents_with_no_agents = 0
+            files_deleted = 0
+            bytes_freed = 0
+            
+            for doc in shared_docs:
+                # Remove agent from used_by_agents list
+                used_by_agents = doc.get("used_by_agents", [])
+                original_count = len(used_by_agents)
+                
+                # Filter out the target agent
+                used_by_agents = [agent for agent in used_by_agents if agent.get("agent_id") != agent_id]
+                
+                if len(used_by_agents) < original_count:
+                    # Update the document
+                    self.collection.update_one(
+                        {"_id": doc["_id"]},
+                        {"$set": {"used_by_agents": used_by_agents}}
+                    )
+                    documents_updated += 1
+                    
+                    # Check if no agents are using this document anymore
+                    if len(used_by_agents) == 0:
+                        documents_with_no_agents += 1
+                        
+                        # Optionally delete the shared file
+                        try:
+                            storage_path = self.get_shared_document_file_path(doc["document_id"])
+                            if storage_path and os.path.exists(storage_path):
+                                file_size = os.path.getsize(storage_path)
+                                os.remove(storage_path)
+                                files_deleted += 1
+                                bytes_freed += file_size
+                                logger.info(f"Deleted unused shared document file: {storage_path}")
+                        except Exception as e:
+                            logger.warning(f"Failed to delete shared document file: {e}")
+                    
+                    logger.info(f"Removed agent {agent_id} from shared document {doc['document_name']}")
+            
+            return {
+                'documents_updated': documents_updated,
+                'documents_with_no_agents': documents_with_no_agents,
+                'files_deleted': files_deleted,
+                'bytes_freed': bytes_freed,
+                'message': f'Removed agent {agent_id} from {documents_updated} shared documents'
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to remove agent {agent_id} from shared documents: {e}")
+            return {
+                'documents_updated': 0,
+                'documents_with_no_agents': 0,
+                'files_deleted': 0,
+                'bytes_freed': 0,
+                'message': f'Failed to remove agent from shared documents: {str(e)}'
+            }
 
 # Global instance
 shared_knowledge_manager = SharedKnowledgeManager()

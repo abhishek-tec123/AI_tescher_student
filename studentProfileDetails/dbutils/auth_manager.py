@@ -12,6 +12,7 @@ Handles all authentication-related operations including:
 from datetime import datetime
 from typing import Optional, Dict, Any, Tuple
 from .database import DatabaseConnection, generate_student_id, DEFAULT_CORE_MEMORY
+from .student_manager import StudentManager
 
 
 class AuthManager:
@@ -59,13 +60,26 @@ class AuthManager:
         from ..auth.AESPasswordUtils import encrypt_password
         encrypted_password = encrypt_password(password)
 
+        # Normalize subject_agent to ensure subject_agent_id is stored, reusing StudentManager logic
+        normalized_subject_agent = None
+        try:
+            student_manager = StudentManager(self.db)
+            normalized_subject_agent = student_manager._normalize_subject_agent(  # type: ignore[attr-defined]
+                subject_agent,
+                class_name,
+            )
+        except Exception as e:
+            # Fallback gracefully if normalization fails
+            print(f"Warning: failed to normalize subject_agent during auth creation: {e}")
+            normalized_subject_agent = subject_agent
+
         student_doc = {
             "student_id": student_id,
             "student_details": {
                 "name": name,
                 "email": email,
                 "class": class_name,
-                "subject_agent": subject_agent or {}
+                "subject_agent": normalized_subject_agent or {}
             },
             "student_core_memory": DEFAULT_CORE_MEMORY.copy(),
             "conversation_summary": {},
@@ -90,8 +104,19 @@ class AuthManager:
         try:
             from ..activity_tracker import log_student_created
             subject_agent_name = None
-            if subject_agent:
-                subject_agent_name = subject_agent.get("name", "Unknown Agent")
+            if normalized_subject_agent:
+                # Handle list or single dict/string gracefully
+                entry = normalized_subject_agent
+                if isinstance(entry, list) and entry:
+                    entry = entry[0]
+                if isinstance(entry, dict):
+                    subject_agent_name = (
+                        entry.get("subject")
+                        or entry.get("name")
+                        or "Unknown Agent"
+                    )
+                elif isinstance(entry, str):
+                    subject_agent_name = entry
             
             log_student_created(
                 student_id=student_id,

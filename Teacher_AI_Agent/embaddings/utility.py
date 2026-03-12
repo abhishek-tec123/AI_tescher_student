@@ -3,6 +3,7 @@ from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 import hashlib
 import os
+from datetime import datetime
 from embaddings.collectTextFromBook import MixedFileTypeLoader
 
 def load_documents(file_paths: Union[str, List[str]], verbose: bool = True) -> List[Document]:
@@ -43,7 +44,7 @@ def generate_custom_id(file_name, length=5):
     hash_digest = hashlib.sha256(file_name.encode('utf-8')).hexdigest()
     return hash_digest[:length]
 
-def build_embedding_json_for_db(chunks: List[Document], embeddings: List[List[float]], embedding_model_name: str, original_filenames: List[str] = None, agent_metadata: dict | None = None, subject_agent_id: str = None):
+def build_embedding_json_for_db(chunks: List[Document], embeddings: List[List[float]], embedding_model_name: str, original_filenames: List[str] = None, agent_metadata: dict | None = None, subject_agent_id: str = None, file_storage_paths: List[str] | None = None):
     result = []
     unique_ids = set()
     
@@ -98,6 +99,10 @@ def build_embedding_json_for_db(chunks: List[Document], embeddings: List[List[fl
                 "file_name": file_name,
                 "file_type": file_type,
                 "doc_unique_id": unique_id,
+                "storage_path": None,  # Will be set below if available
+                "preview_available": False,  # Will be set below if available
+                "file_size": None,  # Will be set below if available
+                "upload_date": datetime.now().isoformat() if file_name else None,
             },
             "chunk": {
                 "unique_chunk_id": unique_chunk_id,
@@ -114,6 +119,26 @@ def build_embedding_json_for_db(chunks: List[Document], embeddings: List[List[fl
         # ✅ Attach agent metadata ONLY if provided
         if agent_metadata:
             entry["agent_metadata"] = agent_metadata
+        
+        # ✅ Attach file storage information if available
+        if file_storage_paths and file_name:
+            # Find the corresponding storage path for this file
+            file_index = list(file_name_to_unique_id.keys()).index(file_name) if file_name in list(file_name_to_unique_id.keys()) else None
+            if file_index is not None and file_index < len(file_storage_paths) and file_storage_paths[file_index]:
+                storage_path = file_storage_paths[file_index]
+                try:
+                    # Get file size
+                    file_size = os.path.getsize(storage_path) if os.path.exists(storage_path) else None
+                    
+                    # Update document info with storage details
+                    entry["document"].update({
+                        "storage_path": storage_path,
+                        "preview_available": True,
+                        "file_size": file_size
+                    })
+                except Exception as e:
+                    # If we can't get file info, keep defaults
+                    pass
 
         result.append(entry)
 

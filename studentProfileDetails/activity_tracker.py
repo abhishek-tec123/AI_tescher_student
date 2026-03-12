@@ -13,6 +13,7 @@ ACTIVITY_COLLECTION = "activity_logs"
 class ActivityType(str, Enum):
     AGENT_CREATED = "agent_created"
     AGENT_UPDATED = "agent_updated"
+    AGENT_DELETED = "agent_deleted"
     STUDENT_CREATED = "student_created"
     STUDENT_UPDATED = "student_updated"
 
@@ -219,5 +220,28 @@ def log_student_updated(student_id: str, student_name: str, changes: List[str]):
         metadata={
             "changes": changes,
             "action": "updated"
+        }
+    )
+
+def log_agent_deleted(agent_id: str, dropped_collections: List[str], collections_with_multiple_agents: List[str], deleted_chunks: int):
+    """Helper function to log agent deletion."""
+    description = f"Agent deleted - {deleted_chunks} chunks removed"
+    
+    if dropped_collections:
+        description += f", {len(dropped_collections)} collection(s) dropped"
+    
+    if collections_with_multiple_agents:
+        description += f", {len(collections_with_multiple_agents)} multi-agent collection(s) cleaned"
+    
+    return activity_tracker.log_activity(
+        activity_type=ActivityType.AGENT_DELETED,
+        target_id=agent_id,
+        target_name=f"Agent {agent_id}",
+        description=description,
+        metadata={
+            "dropped_collections": dropped_collections,
+            "collections_with_multiple_agents": collections_with_multiple_agents,
+            "deleted_chunks": deleted_chunks,
+            "action": "deleted"
         }
     )

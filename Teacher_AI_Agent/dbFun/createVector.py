@@ -82,6 +82,7 @@ from fastapi import UploadFile
 
 from embaddings.VectorStoreInAtls import create_vector_and_store_in_atlas
 from embaddings.utility import generate_subject_agent_id
+from Teacher_AI_Agent.dbFun.file_storage import document_storage
 import logging
 
 # Configure logging
@@ -125,7 +126,16 @@ async def create_vectors_service(
 
     file_inputs: List[str] = []
     original_filenames: List[str] = []
+    file_storage_paths: List[str] = []  # Track storage paths for each file
 
+    # ✅ Generate ID only if new agent
+    if not subject_agent_id:
+        subject_agent_id = generate_subject_agent_id()
+        logger.info(f"Generated new agent ID: {subject_agent_id}")
+    else:
+        logger.info(f"Using existing agent ID: {subject_agent_id}")
+    
+    # Process files and save them immediately for preview
     for file in files:
         # Extra safety: skip invalid uploads
         if not file or not file.filename:
@@ -133,13 +143,33 @@ async def create_vectors_service(
 
         suffix = os.path.splitext(file.filename)[-1] or ".tmp"
 
+        # Read file content first
+        content = await file.read()
+        
+        # Skip empty file content
+        if not content:
+            continue
+        
+        # Generate document ID and save to storage immediately
+        from Teacher_AI_Agent.embaddings.utility import generate_custom_id
+        document_id = generate_custom_id(file.filename, 5)
+        
+        try:
+            # Save file to permanent storage
+            storage_path = document_storage.save_uploaded_file(
+                file_content=content,
+                agent_id=subject_agent_id,
+                document_id=document_id,
+                filename=file.filename
+            )
+            file_storage_paths.append(storage_path)
+            logger.info(f"Saved original file for preview: {file.filename} -> {storage_path}")
+        except Exception as e:
+            logger.error(f"Failed to save file {file.filename} for preview: {e}")
+            file_storage_paths.append(None)  # Mark as failed
+        
+        # Create temporary file for vector processing
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            content = await file.read()
-
-            # Skip empty file content
-            if not content:
-                continue
-
             tmp.write(content)
             file_inputs.append(tmp.name)
             original_filenames.append(file.filename)
@@ -181,6 +211,9 @@ async def create_vectors_service(
                 subject_agent_id = generate_subject_agent_id()
         else:
             subject_agent_id = generate_subject_agent_id()
+    
+    # Now that we have the final agent_id, update storage paths if needed
+    # (This is already done above since we save files immediately now)
 
     # Add global settings to agent metadata
     if agent_metadata is None:
@@ -190,7 +223,7 @@ async def create_vectors_service(
         "global_prompt_enabled": global_prompt_enabled,
         "global_rag_enabled": global_rag_enabled
     })
-
+    
     result = create_vector_and_store_in_atlas(
         subject_agent_id=subject_agent_id,
         file_inputs=file_inputs,
@@ -199,6 +232,7 @@ async def create_vectors_service(
         embedding_model=embedding_model,
         original_filenames=original_filenames,
         agent_metadata=agent_metadata,
+        file_storage_paths=file_storage_paths,  # Pass storage paths
     )
 
     # Add full prompt information to response

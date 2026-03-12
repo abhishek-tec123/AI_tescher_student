@@ -217,10 +217,31 @@ async def delete_agent(subject_agent_id: str):
     if not result["deleted"]:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    return {
+    # Build enhanced response with collection and storage deletion information
+    response = {
         "message": f"Agent {subject_agent_id} deleted successfully.",
-        "deleted_chunks": result["deleted_chunks"]
+        "deleted_chunks": result["deleted_chunks"],
+        "dropped_collections": result.get("dropped_collections", []),
+        "collections_with_multiple_agents": result.get("collections_with_multiple_agents", []),
+        "collections_dropped_count": len(result.get("dropped_collections", [])),
+        "multi_agent_collections_cleaned": len(result.get("collections_with_multiple_agents", [])),
+        "storage_deletion": result.get("storage_deletion", {}),
+        "total_files_deleted": result.get("total_files_deleted", 0),
+        "total_bytes_freed": result.get("total_bytes_freed", 0),
+        "total_mb_freed": round(result.get("total_bytes_freed", 0) / (1024*1024), 2)
     }
+
+    # Add specific messages for different scenarios
+    if response["collections_dropped_count"] > 0:
+        response["message"] += f" Dropped {response['collections_dropped_count']} collection(s)."
+    
+    if response["multi_agent_collections_cleaned"] > 0:
+        response["message"] += f" Cleaned {response['multi_agent_collections_cleaned']} multi-agent collection(s)."
+    
+    if response["total_files_deleted"] > 0:
+        response["message"] += f" Deleted {response['total_files_deleted']} storage files ({response['total_mb_freed']} MB freed)."
+
+    return response
 
 @router.post("/agent_of_class")
 def agent(request: ClassRequest):

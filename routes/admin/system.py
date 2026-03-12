@@ -5,6 +5,7 @@ Handles shared knowledge documents, agent settings, and system configuration
 
 from fastapi import APIRouter, Depends, UploadFile, File, Form, Request, HTTPException
 import os
+import mimetypes
 import logging
 from studentProfileDetails.auth.dependencies import require_role
 from pydantic import BaseModel
@@ -117,6 +118,134 @@ def get_agent_enabled_documents(
         "status": "success",
         "documents": shared_knowledge_manager.get_agent_enabled_documents(agent_id)
     }
+
+@router.get("/shared-knowledge/{document_id}")
+def get_shared_document_metadata(
+    document_id: str,
+    current_user: dict = Depends(require_role("admin"))
+):
+    """Get detailed metadata for a specific shared document."""
+    try:
+        # Try to find document by document_id first, then by doc_unique_id
+        metadata = shared_knowledge_manager.get_shared_document_metadata(document_id)
+        
+        # If not found by document_id, try by doc_unique_id
+        if not metadata:
+            from pymongo import MongoClient
+            
+            mongodb_uri = os.environ.get("MONGODB_URI")
+            if not mongodb_uri:
+                raise HTTPException(status_code=500, detail="MongoDB URI not configured")
+            
+            client = MongoClient(mongodb_uri)
+            db = client["teacher_ai"]
+            collection = db["shared_knowledge"]
+            
+            # Find document by doc_unique_id
+            doc = collection.find_one({"document.doc_unique_id": document_id})
+            if doc:
+                actual_document_id = doc.get("document_id")
+                metadata = shared_knowledge_manager.get_shared_document_metadata(actual_document_id)
+            
+            client.close()
+        
+        if not metadata:
+            raise HTTPException(status_code=404, detail="Shared document not found")
+        
+        return {
+            "status": "success",
+            "document": metadata
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get shared document metadata: {str(e)}")
+
+@router.get("/shared-knowledge/{document_id}/preview")
+def preview_shared_document(
+    document_id: str,
+    current_user: dict = Depends(require_role("admin"))
+):
+    """Preview/download a shared document file."""
+    try:
+        # Try to find document by document_id first, then by doc_unique_id
+        storage_path = shared_knowledge_manager.get_shared_document_file_path(document_id)
+        
+        # If not found by document_id, try by doc_unique_id
+        if not storage_path:
+            # Look for document by doc_unique_id
+            from pymongo import MongoClient
+            
+            mongodb_uri = os.environ.get("MONGODB_URI")
+            if not mongodb_uri:
+                raise HTTPException(status_code=500, detail="MongoDB URI not configured")
+            
+            client = MongoClient(mongodb_uri)
+            db = client["teacher_ai"]
+            collection = db["shared_knowledge"]
+            
+            # Find document by doc_unique_id
+            doc = collection.find_one({"document.doc_unique_id": document_id})
+            if doc:
+                actual_document_id = doc.get("document_id")
+                storage_path = shared_knowledge_manager.get_shared_document_file_path(actual_document_id)
+            
+            client.close()
+        
+        if not storage_path:
+            raise HTTPException(status_code=404, detail="Document file not found or not available for preview")
+        
+        if not os.path.exists(storage_path):
+            raise HTTPException(status_code=404, detail="Document file not found on disk")
+        
+        # Get document metadata for filename - try both IDs
+        metadata = shared_knowledge_manager.get_shared_document_metadata(document_id)
+        if not metadata:
+            # Try to find metadata by doc_unique_id
+            from pymongo import MongoClient
+            mongodb_uri = os.environ.get("MONGODB_URI")
+            client = MongoClient(mongodb_uri)
+            db = client["teacher_ai"]
+            collection = db["shared_knowledge"]
+            
+            doc = collection.find_one({"document.doc_unique_id": document_id})
+            if doc:
+                actual_document_id = doc.get("document_id")
+                metadata = shared_knowledge_manager.get_shared_document_metadata(actual_document_id)
+            
+            client.close()
+        
+        filename = metadata.get("document_name", f"shared_document_{document_id}") if metadata else f"shared_document_{document_id}"
+        
+        # Determine MIME type
+        mime_type = mimetypes.guess_type(storage_path)[0]
+        if not mime_type:
+            # Default based on file extension
+            ext = os.path.splitext(storage_path)[1].lower()
+            mime_map = {
+                '.pdf': 'application/pdf',
+                '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                '.doc': 'application/msword',
+                '.txt': 'text/plain',
+                '.html': 'text/html',
+                '.htm': 'text/html',
+                '.csv': 'text/csv',
+                '.json': 'application/json'
+            }
+            mime_type = mime_map.get(ext, 'application/octet-stream')
+        
+        # Return file for preview/download
+        from fastapi.responses import FileResponse
+        return FileResponse(
+            path=storage_path,
+            filename=filename,
+            media_type=mime_type
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to preview shared document: {str(e)}")
 
 @router.get("/global-rag-knowledge")
 def list_global_rag_knowledge(current_user: dict = Depends(require_role("admin"))):

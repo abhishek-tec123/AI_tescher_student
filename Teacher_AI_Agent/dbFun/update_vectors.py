@@ -300,6 +300,47 @@ async def update_agent_data(
                 **auto_result
             }
 
+        # ✅ Update student's subject_agent field to include the actual agent_id
+        try:
+            from studentProfileDetails.dbutils import StudentManager
+            student_manager = StudentManager()
+            
+            # Find students who might be using this agent based on subject name
+            # This is a simple approach - in production, you'd have proper enrollment tracking
+            if subject and found_db_name:
+                # Get students from the class who have this subject
+                students = student_manager.get_students_by_class(found_db_name)
+                
+                for student in students:
+                    student_details = student.get("student_details", {})
+                    student_subjects = student_details.get("subject_agent", [])
+                    
+                    # Check if this student has this subject
+                    subject_found = False
+                    updated_subjects = []
+                    
+                    for subj in student_subjects:
+                        if isinstance(subj, dict) and subj.get("subject") == subject:
+                            # Update this subject entry to include the agent_id
+                            updated_subjects.append({
+                                "subject": subject,
+                                "agent_id": subject_agent_id  # Add the actual agent ID
+                            })
+                            subject_found = True
+                        else:
+                            updated_subjects.append(subj)
+                    
+                    # Update student record if we found and updated the subject
+                    if subject_found:
+                        student_manager.update_student(
+                            student_id=student.get("student_id"),
+                            subject_agent=updated_subjects
+                        )
+                        print(f"✅ Updated student {student.get('student_id')} subject_agent with agent_id {subject_agent_id}")
+                        
+        except Exception as e:
+            print(f"⚠️  Failed to update student subject_agent: {e}")
+
         delete_result = found_collection.delete_many(
             {
                 "subject_agent_id": subject_agent_id,
@@ -354,10 +395,135 @@ async def delete_vectors(subject_agent_id: str):
 async def delete_agent_data(subject_agent_id: str) -> dict:
     """
     Delete an agent and all its vectors/documents from MongoDB.
+    Enhanced to drop the entire collection if it contains only the target agent's data
+    and delete all local storage files associated with the agent.
     """
-    deleted_chunks = await delete_vectors(subject_agent_id)
+    MONGODB_URI = os.environ.get("MONGODB_URI")
+    if not MONGODB_URI:
+        raise HTTPException(status_code=500, detail="MongoDB URI not configured")
 
-    if deleted_chunks == 0:
+    client = MongoClient(MONGODB_URI)
+    
+    deleted_chunks = 0
+    dropped_collections = []
+    collections_with_multiple_agents = []
+    
+    # Storage deletion statistics
+    storage_deletion_stats = {
+        'agent_storage': {'deleted': False, 'files_deleted': 0, 'bytes_freed': 0},
+        'shared_documents': {'documents_updated': 0, 'files_deleted': 0, 'bytes_freed': 0}
+    }
+    
+    # Search all databases for the agent
+    for db_name in client.list_database_names():
+        if db_name in ["admin", "local", "config"]:
+            continue
+        db = client[db_name]
+
+        for collection_name in db.list_collection_names():
+            collection = db[collection_name]
+            
+            # Check if this collection contains the target agent
+            agent_docs = list(collection.find({"subject_agent_id": subject_agent_id}))
+            if not agent_docs:
+                continue
+                
+            # Count total documents and unique agents in this collection
+            total_docs = collection.count_documents({})
+            unique_agents = collection.distinct("subject_agent_id")
+            
+            print(f"Collection {db_name}.{collection_name}: {total_docs} total docs, {len(unique_agents)} unique agents")
+            
+            if len(unique_agents) == 1 and unique_agents[0] == subject_agent_id:
+                # Safe to drop the entire collection - it only contains our target agent
+                try:
+                    print(f"Dropping collection {db_name}.{collection_name} as it only contains agent {subject_agent_id}")
+                    db.drop_collection(collection_name)
+                    dropped_collections.append(f"{db_name}.{collection_name}")
+                    deleted_chunks += len(agent_docs)
+                    print(f"✅ Dropped collection {db_name}.{collection_name} with {len(agent_docs)} documents")
+                except Exception as e:
+                    print(f"❌ Failed to drop collection {db_name}.{collection_name}: {e}")
+                    # Fallback to document-level deletion
+                    delete_result = collection.delete_many({"subject_agent_id": subject_agent_id})
+                    deleted_chunks += delete_result.deleted_count
+                    print(f"Fallback: Deleted {delete_result.deleted_count} documents from {db_name}.{collection_name}")
+            else:
+                # Collection contains multiple agents - only delete this agent's documents
+                collections_with_multiple_agents.append(f"{db_name}.{collection_name}")
+                delete_result = collection.delete_many({"subject_agent_id": subject_agent_id})
+                deleted_chunks += delete_result.deleted_count
+                print(f"Deleted {delete_result.deleted_count} documents from multi-agent collection {db_name}.{collection_name}")
+
+    # Delete agent local storage
+    try:
+        from Teacher_AI_Agent.dbFun.file_storage import document_storage
+        storage_deletion_stats['agent_storage'] = document_storage.delete_agent_storage(subject_agent_id)
+        print(f"✅ Agent storage deletion: {storage_deletion_stats['agent_storage']['message']}")
+    except Exception as e:
+        print(f"❌ Failed to delete agent storage: {e}")
+        storage_deletion_stats['agent_storage'] = {
+            'deleted': False,
+            'message': f'Failed to delete agent storage: {str(e)}',
+            'files_deleted': 0,
+            'bytes_freed': 0
+        }
+    
+    # Remove agent from shared documents
+    try:
+        from Teacher_AI_Agent.dbFun.shared_knowledge import shared_knowledge_manager
+        shared_result = shared_knowledge_manager.remove_agent_from_shared_documents(subject_agent_id)
+        storage_deletion_stats['shared_documents'] = shared_result
+        print(f"✅ Shared document cleanup: {shared_result['message']}")
+    except Exception as e:
+        print(f"❌ Failed to remove agent from shared documents: {e}")
+        storage_deletion_stats['shared_documents'] = {
+            'documents_updated': 0,
+            'files_deleted': 0,
+            'bytes_freed': 0,
+            'message': f'Failed to remove agent from shared documents: {str(e)}'
+        }
+
+    # Log activity for agent deletion
+    try:
+        from studentProfileDetails.activity_tracker import log_agent_deleted
+        
+        log_agent_deleted(
+            agent_id=subject_agent_id,
+            dropped_collections=dropped_collections,
+            collections_with_multiple_agents=collections_with_multiple_agents,
+            deleted_chunks=deleted_chunks
+        )
+        print(f"✅ Logged agent deletion activity for {subject_agent_id}")
+        
+    except Exception as e:
+        print(f"❌ Failed to log agent deletion activity: {e}")
+
+    # Calculate total storage freed
+    total_files_deleted = storage_deletion_stats['agent_storage']['files_deleted'] + storage_deletion_stats['shared_documents']['files_deleted']
+    total_bytes_freed = storage_deletion_stats['agent_storage']['bytes_freed'] + storage_deletion_stats['shared_documents']['bytes_freed']
+
+    print(f"Agent {subject_agent_id} deletion summary:")
+    print(f"  - Total chunks deleted: {deleted_chunks}")
+    print(f"  - Collections dropped: {len(dropped_collections)}")
+    print(f"  - Storage files deleted: {total_files_deleted}")
+    print(f"  - Storage space freed: {total_bytes_freed} bytes ({round(total_bytes_freed / (1024*1024), 2)} MB)")
+    if dropped_collections:
+        print(f"    Dropped: {', '.join(dropped_collections)}")
+    if collections_with_multiple_agents:
+        print(f"  - Multi-agent collections cleaned: {len(collections_with_multiple_agents)}")
+        print(f"    Cleaned: {', '.join(collections_with_multiple_agents)}")
+
+    if deleted_chunks == 0 and total_files_deleted == 0:
         return {"deleted": False, "deleted_chunks": 0}
 
-    return {"deleted": True, "deleted_chunks": deleted_chunks, "subject_agent_id": subject_agent_id}
+    return {
+        "deleted": True, 
+        "deleted_chunks": deleted_chunks, 
+        "subject_agent_id": subject_agent_id,
+        "dropped_collections": dropped_collections,
+        "collections_with_multiple_agents": collections_with_multiple_agents,
+        "storage_deletion": storage_deletion_stats,
+        "total_files_deleted": total_files_deleted,
+        "total_bytes_freed": total_bytes_freed
+    }

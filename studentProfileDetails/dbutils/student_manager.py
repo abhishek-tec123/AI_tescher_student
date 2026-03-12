@@ -26,6 +26,108 @@ class StudentManager:
         self.db = db_connection or DatabaseConnection()
         self.students = self.db.get_students_collection()
     
+    def _normalize_subject_agent(
+        self,
+        subject_agent: Optional[Any],
+        class_name: str
+    ) -> Optional[Any]:
+        """
+        Ensure subject_agent entries also store subject_agent_id when possible.
+        
+        - If items already contain subject_agent_id / agent_id / id, keep them.
+        - If items only contain a subject name, resolve subject_agent_id using
+          get_all_agents_of_class(class_name) and attach it.
+        """
+        if not subject_agent:
+            return subject_agent
+
+        try:
+            from Teacher_AI_Agent.dbFun.collections import (
+                get_all_agents_of_class,
+                list_all_collections,
+            )
+
+            subject_to_agent_id: Dict[str, str] = {}
+
+            # Helper to index agents by subject
+            def index_agents(agents_list, preferred_class: Optional[str] = None):
+                if not isinstance(agents_list, list):
+                    return
+                for agent in agents_list:
+                    if not isinstance(agent, dict):
+                        continue
+                    subj = agent.get("subject")
+                    subj_agent_id = agent.get("subject_agent_id")
+                    agent_class = agent.get("class")
+                    if not subj or not subj_agent_id:
+                        continue
+
+                    # If we already have an ID for this subject, only override
+                    # when the new one matches preferred_class more closely.
+                    if subj in subject_to_agent_id:
+                        if preferred_class and agent_class == preferred_class:
+                            subject_to_agent_id[subj] = subj_agent_id
+                        continue
+                    subject_to_agent_id[subj] = subj_agent_id
+
+            # 1) Try class-specific lookup first (fast, precise)
+            if class_name:
+                agents_response = get_all_agents_of_class(class_name)
+                if isinstance(agents_response, dict):
+                    index_agents(agents_response.get("agents"), preferred_class=class_name)
+                elif isinstance(agents_response, list):
+                    index_agents(agents_response, preferred_class=class_name)
+
+            # 2) Fallback: scan all collections if we still don't have mappings
+            if not subject_to_agent_id:
+                all_agents_response = list_all_collections()
+                if isinstance(all_agents_response, dict):
+                    index_agents(
+                        all_agents_response.get("agents"),
+                        preferred_class=class_name or None,
+                    )
+
+            def enrich_entry(entry: Any) -> Any:
+                # String entry -> treat as subject name
+                if isinstance(entry, str):
+                    subj = entry
+                    agent_id = subject_to_agent_id.get(subj)
+                    result = {"subject": subj}
+                    if agent_id:
+                        result["subject_agent_id"] = agent_id
+                    return result
+
+                # Dict entry -> ensure subject_agent_id present
+                if isinstance(entry, dict):
+                    # If already has an ID field, keep as-is
+                    if any(
+                        key in entry
+                        for key in ("subject_agent_id", "agent_id", "id")
+                    ):
+                        return entry
+
+                    subj = entry.get("subject")
+                    if subj:
+                        agent_id = subject_to_agent_id.get(subj)
+                        if agent_id:
+                            entry = dict(entry)  # shallow copy
+                            entry["subject_agent_id"] = agent_id
+                    return entry
+
+                # Fallback: return as-is
+                return entry
+
+            # Normalize structure: list of entries is the main case
+            if isinstance(subject_agent, list):
+                return [enrich_entry(item) for item in subject_agent]
+
+            # Single entry (dict or string)
+            return enrich_entry(subject_agent)
+
+        except Exception as e:
+            print(f"Warning: failed to normalize subject_agent for class '{class_name}': {e}")
+            return subject_agent
+    
     def initialize_db_collection(self):
         """Initialize database and collection if they don't exist."""
         return self.db.initialize_db_collection()
@@ -51,13 +153,16 @@ class StudentManager:
         """
         student_id = generate_student_id()
 
+        # Normalize subject_agent to ensure subject_agent_id is stored
+        normalized_subject_agent = self._normalize_subject_agent(subject_agent, class_name)
+
         student_doc = {
             "student_id": student_id,
             "student_details": {
                 "name": name,
                 "email": email,
                 "class": class_name,
-                "subject_agent": subject_agent or {}
+                "subject_agent": normalized_subject_agent or {}
             },
             "student_core_memory": DEFAULT_CORE_MEMORY.copy(),
             "conversation_summary": {},
@@ -106,7 +211,22 @@ class StudentManager:
         if "class_name" in data:
             update_data["student_details.class"] = data["class_name"]
         if "subject_agent" in data:
-            update_data["student_details.subject_agent"] = data["subject_agent"]
+            # Determine the class to use for normalization:
+            # prefer new class_name from payload, otherwise current student's class
+            current_class = data.get("class_name")
+            if not current_class:
+                existing = self.get_student(student_id)
+                current_class = (
+                    existing.get("student_details", {}).get("class", "")
+                    if existing
+                    else ""
+                )
+
+            normalized_subject_agent = self._normalize_subject_agent(
+                data["subject_agent"],
+                current_class or ""
+            )
+            update_data["student_details.subject_agent"] = normalized_subject_agent
 
         if not update_data:
             return None

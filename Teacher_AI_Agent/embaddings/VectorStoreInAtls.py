@@ -86,7 +86,8 @@ def create_vector_and_store_in_atlas(
     embedding_model,
     original_filenames,
     agent_metadata: dict | None = None,
-    subject_agent_id: str | None = None, 
+    subject_agent_id: str | None = None,
+    file_storage_paths: List[str] | None = None,  # New parameter for file storage paths
 ):
     if embedding_model is None:
         raise ValueError("No embedding model provided. This function requires a pre-loaded embedding model.")
@@ -100,6 +101,7 @@ def create_vector_and_store_in_atlas(
         original_filenames=original_filenames,
         subject_agent_id=subject_agent_id,  # ✅ pass down
         agent_metadata=agent_metadata,
+        file_storage_paths=file_storage_paths,  # Pass storage paths to utility
     )
 
     logger.info(f"Generated embeddings for {len(vector)} chunks")

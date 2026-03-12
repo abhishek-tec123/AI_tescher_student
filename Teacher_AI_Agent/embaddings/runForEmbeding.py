@@ -11,7 +11,8 @@ def get_vectors_and_details(
     embedding_model=None,
     original_filenames=None,
     subject_agent_id: str | None = None,
-    agent_metadata: dict | None = None
+    agent_metadata: dict | None = None,
+    file_storage_paths: list | None = None  # New parameter for file storage paths
 ):
     # 📂 Step 1: Load documents
     print("[*] Loading documents...")
@@ -31,7 +32,7 @@ def get_vectors_and_details(
 
     # 🧱 Step 4: Build JSON for DB
     embedding_json, doc_ids = build_embedding_json_for_db(
-        chunks, embeddings, embedding_model_name=model_name, original_filenames=original_filenames
+        chunks, embeddings, embedding_model_name=model_name, original_filenames=original_filenames, subject_agent_id=subject_agent_id, file_storage_paths=file_storage_paths
     )
 
     # ✅ Step 5: Attach subject_agent_id and agent_metadata if provided
