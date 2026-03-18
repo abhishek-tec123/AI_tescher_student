@@ -117,11 +117,11 @@ from studentProfileDetails.feedback_handler import record_feedback, FeedbackRequ
 @router.post("/feedback")
 def submit_feedback(
     payload: FeedbackRequest,
-    student_manager: StudentManager = StudentManagerDep,
+    conversation_manager: ConversationManager = Depends(get_conversation_manager),
     current_user: dict = Depends(get_current_user)
 ):
     return record_feedback(
         conversation_id=payload.conversation_id,
         feedback=payload.feedback,
-        student_manager=student_manager
+        conversation_manager=conversation_manager
     )

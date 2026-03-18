@@ -1,5 +1,5 @@
 from fastapi import HTTPException, status
-from studentProfileDetails.dbutils import StudentManager
+from studentProfileDetails.dbutils import ConversationManager
 
 from pydantic import BaseModel, Field
 from typing import Literal
@@ -21,10 +21,10 @@ def record_feedback(
     *,
     conversation_id: str,
     feedback: str,
-    student_manager: StudentManager
+    conversation_manager: ConversationManager
 ) -> dict:
 
-    matched = student_manager.update_feedback_by_conversation_id(
+    matched = conversation_manager.update_feedback_by_conversation_id(
         conversation_id=conversation_id,
         feedback=feedback
     )
