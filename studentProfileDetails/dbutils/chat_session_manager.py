@@ -57,7 +57,10 @@ class ChatSessionManager:
         student_id: str,
         title: Optional[str] = None,
         subject: Optional[str] = None,
-        first_query: Optional[str] = None
+        first_query: Optional[str] = None,
+        agent_type: Optional[str] = None,
+        agent_name: Optional[str] = None,
+        agent_id: Optional[str] = None
     ) -> str:
         """
         Create a new chat session for a student within their existing document.
@@ -67,6 +70,9 @@ class ChatSessionManager:
             title: Optional custom title
             subject: Optional subject for the chat
             first_query: Optional first query to generate title from
+            agent_type: Optional agent type (e.g., 'subject', 'general')
+            agent_name: Optional agent name (e.g., 'Math', 'Science')
+            agent_id: Optional agent ID
             
         Returns:
             Chat session ID as string
@@ -87,6 +93,14 @@ class ChatSessionManager:
         
         if subject:
             chat_session_data["subject"] = subject
+        
+        # Add agent information if provided
+        if agent_type:
+            chat_session_data["agent_type"] = agent_type
+        if agent_name:
+            chat_session_data["agent_name"] = agent_name
+        if agent_id:
+            chat_session_data["agent_id"] = agent_id
         
         # Add chat session to EXISTING student document
         self.students.update_one(
@@ -350,7 +364,10 @@ class ChatSessionManager:
         student_id: str,
         subject: str,
         query: Optional[str] = None,
-        title: Optional[str] = None
+        title: Optional[str] = None,
+        agent_type: Optional[str] = None,
+        agent_name: Optional[str] = None,
+        agent_id: Optional[str] = None
     ) -> str:
         """
         Get the active chat session for a student and subject, or create a new one.
@@ -361,6 +378,9 @@ class ChatSessionManager:
             subject: Subject name
             query: Optional query for title generation
             title: Optional custom title
+            agent_type: Optional agent type
+            agent_name: Optional agent name
+            agent_id: Optional agent ID
             
         Returns:
             Chat session ID as string
@@ -396,7 +416,10 @@ class ChatSessionManager:
             student_id=student_id,
             title=title,
             subject=subject,
-            first_query=query
+            first_query=query,
+            agent_type=agent_type,
+            agent_name=agent_name,
+            agent_id=agent_id
         )
         
         # Set as active session for this subject

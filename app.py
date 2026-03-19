@@ -1,8 +1,6 @@
 from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from routes.performance.middleware import PerformanceMonitoringMiddleware
-from datetime import datetime
-import os
 
 from routes.core.startup import startup_event
 from routes.admin import admin_router

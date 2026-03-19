@@ -15,6 +15,9 @@ router = APIRouter()
 class CreateChatSessionRequest(BaseModel):
     student_id: str
     title: Optional[str] = None
+    agent_type: Optional[str] = None
+    agent_name: Optional[str] = None
+    agent_id: Optional[str] = None
 
 class UpdateChatSessionRequest(BaseModel):
     title: Optional[str] = None
@@ -40,12 +43,18 @@ def create_chat_session(
 
         chat_session_id = chat_session_manager.create_chat_session(
             student_id=student_id,
-            title=title
+            title=title,
+            agent_type=request.agent_type,
+            agent_name=request.agent_name,
+            agent_id=request.agent_id
         )
 
         return {
             "chat_session_id": chat_session_id,
             "title": title,
+            "agent_type": request.agent_type,
+            "agent_name": request.agent_name,
+            "agent_id": request.agent_id,
             "message": "New chat session created successfully"
         }
 
