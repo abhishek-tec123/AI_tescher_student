@@ -1,0 +1,332 @@
+"""
+Topic Chat API Routes
+
+FastAPI endpoints for topic-restricted chat functionality.
+Provides session management and chat endpoints.
+"""
+
+import os
+import sys
+import logging
+from typing import Optional, Dict, Any, List
+from datetime import datetime
+
+# Try to import FastAPI
+try:
+    from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
+    from fastapi.responses import JSONResponse
+    from pydantic import BaseModel, Field
+    HAS_FASTAPI = True
+except ImportError:
+    HAS_FASTAPI = False
+    # Create dummy classes for type hints
+    class BaseModel:
+        pass
+    class APIRouter:
+        def get(self, *args, **kwargs): pass
+        def post(self, *args, **kwargs): pass
+        def delete(self, *args, **kwargs): pass
+
+# Add paths for imports
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+_parent_dir = os.path.dirname(_current_dir)
+_root_dir = os.path.dirname(_parent_dir)
+
+if _current_dir not in sys.path:
+    sys.path.insert(0, _current_dir)
+if _parent_dir not in sys.path:
+    sys.path.insert(0, _parent_dir)
+if _root_dir not in sys.path:
+    sys.path.insert(0, _root_dir)
+
+logger = logging.getLogger(__name__)
+
+# Pydantic models for request/response
+if HAS_FASTAPI:
+    class CreateSessionRequest(BaseModel):
+        student_id: str = Field(..., description="Unique student identifier")
+        class_name: str = Field(..., description="Class/grade (e.g., '10th')")
+        subject: str = Field(..., description="Subject name (e.g., 'Science')")
+        topic_id: str = Field(..., description="Topic identifier")
+        student_profile: Optional[Dict[str, Any]] = Field(
+            default=None,
+            description="Optional student personalization data"
+        )
+    
+    class ChatRequest(BaseModel):
+        query: str = Field(..., description="Student's question", max_length=3000)
+    
+    class ChatResponse(BaseModel):
+        response: str = Field(..., description="Agent's response")
+        context_used: bool = Field(..., description="Whether context was used")
+        chunks_referenced: List[str] = Field(default_factory=list)
+        retrieval_info: Dict[str, Any] = Field(default_factory=dict)
+        session_id: str = Field(..., description="Session identifier")
+        safety_flag: Optional[bool] = Field(default=False)
+        
+    class SessionResponse(BaseModel):
+        session_id: str
+        topic: Dict[str, Any]
+        context_stats: Dict[str, Any]
+        message: str
+        
+    class SessionStatusResponse(BaseModel):
+        session_id: str
+        topic: Dict[str, Any]
+        context_stats: Dict[str, Any]
+        message_count: int
+        created_at: Optional[str]
+        last_activity: Optional[str]
+        student_id: str
+        subject: str
+        class_name: str
+        
+    class EndSessionResponse(BaseModel):
+        session_id: str
+        ended: bool
+        message: str
+
+# Global agent instance (initialized on first use)
+_topic_chat_agent = None
+
+async def get_topic_chat_agent():
+    """Get or initialize the topic chat agent."""
+    global _topic_chat_agent
+    
+    if _topic_chat_agent is None:
+        try:
+            from studentAgent.topic_restricted import TopicRestrictedChatAgent
+            from Teacher_AI_Agent.model_cache import ModelCache
+            
+            # Get embedding model from cache
+            model_cache = ModelCache()
+            embedding_model = model_cache.get_embedding_model()
+            
+            _topic_chat_agent = TopicRestrictedChatAgent()
+            await _topic_chat_agent.initialize(embedding_model=embedding_model)
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize topic chat agent: {e}")
+            raise HTTPException(status_code=500, detail="Failed to initialize chat agent")
+    
+    return _topic_chat_agent
+
+# Create router
+if HAS_FASTAPI:
+    router = APIRouter(prefix="/topic-chat", tags=["topic-chat"])
+else:
+    router = None
+    logger.warning("FastAPI not available, API routes not created")
+
+# API Endpoints
+if HAS_FASTAPI:
+    @router.post("/session", response_model=SessionResponse)
+    async def create_session(
+        request: CreateSessionRequest,
+        agent = Depends(get_topic_chat_agent)
+    ):
+        """
+        Initialize a new topic-restricted chat session.
+        
+        Loads all topic chunks into session cache.
+        """
+        try:
+            result = await agent.initialize_session(
+                student_id=request.student_id,
+                class_name=request.class_name,
+                subject=request.subject,
+                topic_id=request.topic_id,
+                student_profile=request.student_profile
+            )
+            
+            if result.get('error'):
+                raise HTTPException(status_code=400, detail=result['error'])
+            
+            return SessionResponse(
+                session_id=result['session_id'],
+                topic=result['topic'],
+                context_stats=result['context_stats'],
+                message=result.get('message', 'Session created successfully')
+            )
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error creating session: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Failed to create session: {str(e)}")
+    
+    @router.post("/{session_id}/ask", response_model=ChatResponse)
+    async def chat_message(
+        session_id: str,
+        request: ChatRequest,
+        agent = Depends(get_topic_chat_agent)
+    ):
+        """
+        Send a message in a topic-restricted chat session.
+        
+        The agent will:
+        1. Retrieve relevant context from pre-loaded topic
+        2. Enforce strict topic constraints
+        3. Generate response using ONLY the provided context
+        """
+        try:
+            result = await agent.chat(
+                session_id=session_id,
+                query=request.query
+            )
+            
+            if result.get('error'):
+                # Check if session expired
+                if "expired" in result['error'].lower() or "not found" in result['error'].lower():
+                    raise HTTPException(status_code=404, detail=result['error'])
+                raise HTTPException(status_code=400, detail=result['error'])
+            
+            return ChatResponse(
+                response=result['response'],
+                context_used=result.get('context_used', False),
+                chunks_referenced=result.get('chunks_referenced', []),
+                retrieval_info=result.get('retrieval_info', {}),
+                session_id=result['session_id'],
+                safety_flag=result.get('safety_flag', False)
+            )
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error processing chat message: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Failed to process message: {str(e)}")
+    
+    @router.get("/{session_id}", response_model=SessionStatusResponse)
+    async def get_session_status(
+        session_id: str,
+        agent = Depends(get_topic_chat_agent)
+    ):
+        """Get current session state and statistics."""
+        try:
+            result = await agent.get_session_status(session_id)
+            
+            if result.get('error'):
+                raise HTTPException(status_code=404, detail=result['error'])
+            
+            return SessionStatusResponse(
+                session_id=result['session_id'],
+                topic=result['topic'],
+                context_stats=result['context_stats'],
+                message_count=result.get('message_count', 0),
+                created_at=result.get('created_at'),
+                last_activity=result.get('last_activity'),
+                student_id=result.get('student_id', ''),
+                subject=result.get('subject', ''),
+                class_name=result.get('class_name', '')
+            )
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error getting session status: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Failed to get session status: {str(e)}")
+    
+    @router.delete("/{session_id}", response_model=EndSessionResponse)
+    async def end_session(
+        session_id: str,
+        agent = Depends(get_topic_chat_agent)
+    ):
+        """End a chat session and clean up resources."""
+        try:
+            result = await agent.end_session(session_id)
+            
+            return EndSessionResponse(
+                session_id=result['session_id'],
+                ended=result['ended'],
+                message=result.get('message', 'Session ended')
+            )
+            
+        except Exception as e:
+            logger.error(f"Error ending session: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Failed to end session: {str(e)}")
+    
+    @router.get("/health")
+    async def health_check():
+        """Health check endpoint."""
+        return {
+            "status": "healthy",
+            "timestamp": datetime.utcnow().isoformat(),
+            "service": "topic-chat-agent"
+        }
+
+# Function to register routes with main app
+def register_routes(app):
+    """Register topic chat routes with FastAPI app."""
+    if HAS_FASTAPI and router:
+        app.include_router(router)
+        logger.info("Topic chat API routes registered")
+    else:
+        logger.warning("Could not register topic chat routes - FastAPI not available")
+
+# Standalone function for testing
+async def test_topic_chat():
+    """Test function for topic chat agent."""
+    print("Testing Topic Restricted Chat Agent...")
+    
+    try:
+        from studentAgent.topic_restricted import TopicRestrictedChatAgent
+        
+        agent = TopicRestrictedChatAgent()
+        await agent.initialize()
+        
+        # Create a test session
+        session_result = await agent.initialize_session(
+            student_id="test_student_001",
+            class_name="10th",
+            subject="Science",
+            topic_id="topic_photosynthesis",
+            student_profile={
+                "learning_style": "visual",
+                "grade_level": "10th"
+            }
+        )
+        
+        if session_result.get('error'):
+            print(f"Session creation failed: {session_result['error']}")
+            return
+        
+        session_id = session_result['session_id']
+        print(f"✓ Session created: {session_id}")
+        print(f"  Topic: {session_result['topic']['topic_name']}")
+        print(f"  Context stats: {session_result['context_stats']}")
+        
+        # Test on-topic query
+        print("\n--- Testing on-topic query ---")
+        response1 = await agent.chat(
+            session_id=session_id,
+            query="What is photosynthesis?"
+        )
+        print(f"Query: 'What is photosynthesis?'")
+        print(f"Response: {response1['response'][:200]}...")
+        print(f"Context used: {response1['context_used']}")
+        
+        # Test off-topic query
+        print("\n--- Testing off-topic query ---")
+        response2 = await agent.chat(
+            session_id=session_id,
+            query="Who won the World Cup in 2022?"
+        )
+        print(f"Query: 'Who won the World Cup in 2022?'")
+        print(f"Response: {response2['response'][:200]}...")
+        print(f"Off-topic detected: {response2.get('off_topic', False)}")
+        
+        # End session
+        print("\n--- Ending session ---")
+        end_result = await agent.end_session(session_id)
+        print(f"Session ended: {end_result['ended']}")
+        
+        print("\n✓ All tests completed successfully!")
+        
+    except Exception as e:
+        print(f"✗ Test failed: {e}")
+        import traceback
+        traceback.print_exc()
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(test_topic_chat())

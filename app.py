@@ -123,4 +123,11 @@ api_v1_router.include_router(
     tags=["Topics"]
 )
 
+# Topic-Restricted Chat routes
+from studentAgent.api.topic_chat_routes import router as topic_chat_router
+api_v1_router.include_router(
+    topic_chat_router,
+    tags=["Topic Chat"]
+)
+
 app.include_router(api_v1_router)
