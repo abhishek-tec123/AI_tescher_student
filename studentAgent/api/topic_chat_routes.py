@@ -8,12 +8,12 @@ Provides session management and chat endpoints.
 import os
 import sys
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Union
 from datetime import datetime
 
 # Try to import FastAPI
 try:
-    from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
+    from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Query
     from fastapi.responses import JSONResponse
     from pydantic import BaseModel, Field
     HAS_FASTAPI = True
@@ -26,6 +26,8 @@ except ImportError:
         def get(self, *args, **kwargs): pass
         def post(self, *args, **kwargs): pass
         def delete(self, *args, **kwargs): pass
+    class Query:
+        def __init__(self, *args, **kwargs): pass
 
 # Add paths for imports
 _current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -84,6 +86,23 @@ if HAS_FASTAPI:
     class EndSessionResponse(BaseModel):
         session_id: str
         ended: bool
+        message: str
+    
+    class SubtopicInfo(BaseModel):
+        subtopic: str
+        confidence: Optional[float] = None
+    
+    class TopicInfo(BaseModel):
+        topic_id: str
+        topic_name: str
+        description: Optional[str] = None
+        subtopics: Optional[List[Union[str, SubtopicInfo]]] = None
+    
+    class TopicsListResponse(BaseModel):
+        topics: List[TopicInfo]
+        total_count: int
+        class_name: Optional[str] = None
+        subject: Optional[str] = None
         message: str
 
 # Global agent instance (initialized on first use)
@@ -154,6 +173,166 @@ if HAS_FASTAPI:
         except Exception as e:
             logger.error(f"Error creating session: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"Failed to create session: {str(e)}")
+    
+    @router.get("/topics", response_model=TopicsListResponse)
+    async def list_topics(
+        class_name: Optional[str] = None,
+        subject: Optional[str] = None,
+        max_topics: int = Query(default=20, ge=1, le=50, description="Maximum number of topics to extract")
+    ):
+        """
+        List all available topics for topic-restricted chat.
+        
+        This endpoint dynamically extracts topics from the subject's document chunks
+        using LLM analysis. Students can use the returned topic_id to start a chat session.
+        
+        Args:
+            class_name: Optional filter by class/grade (e.g., '10')
+            subject: Optional filter by subject (e.g., 'Science')
+            max_topics: Maximum number of topics to return (1-50)
+            
+        Returns:
+            List of topics with their IDs, names, and descriptions
+            
+        Example:
+            GET /api/v1/topic-chat/topics?class_name=10&subject=Science
+            
+            Response:
+            {
+                "topics": [
+                    {
+                        "topic_id": "Metals and Non-metals",
+                        "topic_name": "Metals and Non-metals",
+                        "description": "Properties and uses of metals and non-metals",
+                        "subtopics": ["Physical properties", "Chemical properties"]
+                    }
+                ],
+                "total_count": 5,
+                "class_name": "10",
+                "subject": "Science",
+                "message": "Successfully extracted 5 topics"
+            }
+        """
+        try:
+            # Import required modules
+            import os
+            from pymongo import MongoClient
+            from Teacher_AI_Agent.agents.topic_extraction_agent import TopicExtractionAgent
+            from Teacher_AI_Agent.model_cache import ModelCache
+            
+            # Get embedding model from cache
+            model_cache = ModelCache()
+            embedding_model = model_cache.get_embedding_model()
+            topic_agent = TopicExtractionAgent(embedding_model=embedding_model)
+            
+            topics_list = []
+            
+            # If class_name and subject provided, extract from that specific collection
+            if class_name and subject:
+                try:
+                    # Extract topics from the specific collection
+                    result = topic_agent.extract_topics_from_agent(
+                        subject_agent_id=f"agent_{class_name}_{subject}",
+                        db_name=class_name,
+                        collection_name=subject,
+                        max_topics=max_topics,
+                        include_subtopics=True
+                    )
+                    
+                    if result.get("status") == "success":
+                        for topic in result.get("topics", []):
+                            topic_name = topic.get("topic", "").strip()
+                            # Skip topics with empty names
+                            if not topic_name:
+                                logger.warning(f"Skipping topic with empty name: {topic}")
+                                continue
+                            topics_list.append({
+                                "topic_id": topic_name.replace(" ", "_").lower(),
+                                "topic_name": topic_name,
+                                "description": topic.get("description", ""),
+                                "subtopics": topic.get("subtopics", [])
+                            })
+                        
+                        return TopicsListResponse(
+                            topics=topics_list,
+                            total_count=len(topics_list),
+                            class_name=class_name,
+                            subject=subject,
+                            message=f"Successfully extracted {len(topics_list)} topics from {class_name}.{subject}"
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to extract from {class_name}.{subject}: {e}")
+            
+            # Otherwise, scan all available collections
+            MONGODB_URI = os.environ.get("MONGODB_URI")
+            if MONGODB_URI:
+                client = MongoClient(MONGODB_URI)
+                
+                # Get all databases (excluding system databases)
+                system_dbs = {"admin", "local", "config"}
+                databases = [db for db in client.list_database_names() if db not in system_dbs]
+                
+                for db_name in databases:
+                    if class_name and db_name != class_name:
+                        continue
+                        
+                    db = client[db_name]
+                    collections = db.list_collection_names()
+                    
+                    for collection_name in collections:
+                        if subject and collection_name != subject:
+                            continue
+                            
+                        try:
+                            # Get a sample to find subject_agent_id
+                            collection = db[collection_name]
+                            sample = collection.find_one({}, {"subject_agent_id": 1})
+                            
+                            if sample and sample.get("subject_agent_id"):
+                                result = topic_agent.extract_topics_from_agent(
+                                    subject_agent_id=sample["subject_agent_id"],
+                                    db_name=db_name,
+                                    collection_name=collection_name,
+                                    max_topics=max_topics,
+                                    include_subtopics=True
+                                )
+                                
+                                if result.get("status") == "success":
+                                    for topic in result.get("topics", []):
+                                        topic_name = topic.get("topic", "").strip()
+                                        # Skip topics with empty names
+                                        if not topic_name:
+                                            logger.warning(f"Skipping topic with empty name from {db_name}.{collection_name}")
+                                            continue
+                                        topic_id = topic_name.replace(" ", "_").lower()
+                                        # Check if topic already exists to avoid duplicates
+                                        if not any(t.get("topic_id") == topic_id for t in topics_list):
+                                            topics_list.append({
+                                                "topic_id": topic_id,
+                                                "topic_name": topic_name,
+                                                "description": topic.get("description", ""),
+                                                "subtopics": topic.get("subtopics", [])
+                                            })
+                        except Exception as e:
+                            logger.warning(f"Failed to extract from {db_name}.{collection_name}: {e}")
+                            continue
+                
+                client.close()
+            
+            return TopicsListResponse(
+                topics=topics_list,
+                total_count=len(topics_list),
+                class_name=class_name,
+                subject=subject,
+                message=f"Successfully extracted {len(topics_list)} topics from available collections"
+            )
+            
+        except Exception as e:
+            logger.error(f"Error listing topics: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to list topics: {str(e)}"
+            )
     
     @router.post("/{session_id}/ask", response_model=ChatResponse)
     async def chat_message(
@@ -244,7 +423,7 @@ if HAS_FASTAPI:
         except Exception as e:
             logger.error(f"Error ending session: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"Failed to end session: {str(e)}")
-    
+
     @router.get("/health")
     async def health_check():
         """Health check endpoint."""

@@ -387,25 +387,7 @@ class TopicRestrictedChatAgent:
         """
         topic_lower = topic_name.lower()
         
-        # Common keyword mappings for school subjects
-        keyword_map = {
-            "metals": ["metal", "metals", "iron", "copper", "aluminium", "zinc", "magnesium", "gold", "silver", "ore", "mineral", "ductile", "malleable", "conductor", "lustrous"],
-            "non-metals": ["non-metal", "nonmetal", "carbon", "sulphur", "phosphorus", "iodine", "chlorine", "brittle", "insulator"],
-            "photosynthesis": ["photosynthesis", "chlorophyll", "leaf", "plant", "sunlight", "stomata", "autotroph"],
-            "motion": ["motion", "movement", "speed", "velocity", "acceleration", "distance", "displacement"],
-            "light": ["light", "reflection", "refraction", "mirror", "lens", "prism", "spectrum"],
-            "electricity": ["electricity", "current", "voltage", "resistance", "circuit", "ohm", "ampere"],
-            "magnetism": ["magnet", "magnetic", "pole", "attraction", "repulsion", "compass", "field"],
-        }
-        
-        # Check for matches in keyword map
-        keywords = []
-        for key, words in keyword_map.items():
-            if key in topic_lower:
-                keywords.extend(words)
-        
-        # Add words from topic name itself
+        # Extract words from topic name itself (3+ characters)
         topic_words = [w.strip() for w in topic_lower.replace("-", " ").replace("_", " ").split() if len(w.strip()) > 2]
-        keywords.extend(topic_words)
         
-        return list(set(keywords))  # Remove duplicates
+        return list(set(topic_words))  # Remove duplicates
