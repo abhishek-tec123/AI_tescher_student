@@ -264,13 +264,13 @@ class TopicSessionManager:
         return f"sess_{student_id[:6]}_{hash_suffix}"
     
     async def _save_session(self, session_id: str, session_state: Dict):
-        """Save session to storage with TTL."""
+        """Save session to storage permanently (no TTL)."""
         session_data = json.dumps(session_state, default=str)
         
         if self.redis:
-            await self._async_redis_setex(
+            # Save permanently without TTL
+            await self._async_redis_set(
                 f"session:{session_id}",
-                self.session_ttl,
                 session_data
             )
         elif self.use_memory_fallback:
@@ -285,6 +285,15 @@ class TopicSessionManager:
             return self.redis.get(key)
         # Async redis
         return await self.redis.get(key)
+    
+    async def _async_redis_set(self, key: str, value: str):
+        """Async wrapper for Redis set (no TTL)."""
+        if hasattr(self.redis, 'set'):
+            # Synchronous redis
+            self.redis.set(key, value)
+        else:
+            # Async redis
+            await self.redis.set(key, value)
     
     async def _async_redis_setex(self, key: str, ttl: int, value: str):
         """Async wrapper for Redis setex."""

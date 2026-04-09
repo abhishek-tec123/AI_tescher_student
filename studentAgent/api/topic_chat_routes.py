@@ -43,12 +43,14 @@ if _root_dir not in sys.path:
 
 logger = logging.getLogger(__name__)
 
-# Import ConversationManager and StudentManager for persistence
+# Import ConversationManager, StudentManager, and ChatSessionManager for persistence
 try:
-    from studentProfileDetails.dbutils import ConversationManager, StudentManager
+    from studentProfileDetails.dbutils import ConversationManager, StudentManager, ChatSessionManager
     HAS_CONVERSATION_MANAGER = True
+    HAS_CHAT_SESSION_MANAGER = True
 except ImportError:
     HAS_CONVERSATION_MANAGER = False
+    HAS_CHAT_SESSION_MANAGER = False
     logger.warning("ConversationManager not available, chat persistence disabled")
 
 # Pydantic models for request/response
@@ -156,7 +158,7 @@ if HAS_FASTAPI:
         """
         Initialize a new topic-restricted chat session.
         
-        Loads all topic chunks into session cache.
+        Loads all topic chunks into session cache and persists session to MongoDB.
         """
         try:
             result = await agent.initialize_session(
@@ -169,6 +171,40 @@ if HAS_FASTAPI:
             
             if result.get('error'):
                 raise HTTPException(status_code=400, detail=result['error'])
+            
+            # Persist chat session to MongoDB
+            if HAS_CHAT_SESSION_MANAGER:
+                try:
+                    session_manager = ChatSessionManager()
+                    session_id = result['session_id']
+                    topic_name = result.get('topic', {}).get('topic_name', request.topic_id)
+                    
+                    # Create chat session entry with topic session ID (sess_* format)
+                    session_manager.students.update_one(
+                        {"student_id": request.student_id},
+                        {
+                            "$set": {
+                                f"chat_sessions.{session_id}": {
+                                    "title": topic_name,
+                                    "subject": request.subject,
+                                    "agent_type": "subject",
+                                    "agent_name": request.subject,
+                                    "agent_id": result.get('agent_id', f"agent_{request.class_name}_{request.subject}"),
+                                    "message_count": 0,
+                                    "last_query": None,
+                                    "last_response": None,
+                                    "last_messages": [],
+                                    "created_at": datetime.utcnow(),
+                                    "updated_at": datetime.utcnow(),
+                                    "chat_session_id": session_id
+                                }
+                            }
+                        }
+                    )
+                    logger.info(f"Chat session persisted to MongoDB: {session_id} for student {request.student_id}")
+                except Exception as e:
+                    logger.error(f"Failed to persist chat session: {e}", exc_info=True)
+                    # Don't fail the request if persistence fails
             
             return SessionResponse(
                 session_id=result['session_id'],
@@ -436,6 +472,41 @@ if HAS_FASTAPI:
                         logger.info(f"Conversation saved for session {session_id}, student {student_id}, agent {subject_agent_id}, conversation_id: {conversation_id}")
                         # Store conversation_id for response
                         result['conversation_id'] = conversation_id
+                        
+                        # Update chat session metadata
+                        if HAS_CHAT_SESSION_MANAGER:
+                            try:
+                                session_manager = ChatSessionManager()
+                                # Get current session data to append to last_messages
+                                current_session = session_manager.get_chat_session(student_id, session_id)
+                                last_messages = []
+                                if current_session and current_session.get('last_messages'):
+                                    last_messages = current_session['last_messages']
+                                
+                                # Add new message to front, keep only last 2
+                                last_messages.insert(0, {
+                                    "query": request.query,
+                                    "response": result['response'][:200] if len(result['response']) > 200 else result['response'],
+                                    "timestamp": datetime.utcnow().isoformat()
+                                })
+                                last_messages = last_messages[:2]
+                                
+                                # Update session metadata
+                                session_manager.students.update_one(
+                                    {"student_id": student_id, f"chat_sessions.{session_id}": {"$exists": True}},
+                                    {
+                                        "$inc": {f"chat_sessions.{session_id}.message_count": 1},
+                                        "$set": {
+                                            f"chat_sessions.{session_id}.last_query": request.query,
+                                            f"chat_sessions.{session_id}.last_response": result['response'][:200] if len(result['response']) > 200 else result['response'],
+                                            f"chat_sessions.{session_id}.last_messages": last_messages,
+                                            f"chat_sessions.{session_id}.updated_at": datetime.utcnow()
+                                        }
+                                    }
+                                )
+                                logger.info(f"Chat session metadata updated: {session_id}")
+                            except Exception as e:
+                                logger.error(f"Failed to update chat session metadata: {e}")
                 except Exception as e:
                     # Log error but don't fail the chat response
                     logger.error(f"Failed to save conversation: {e}")

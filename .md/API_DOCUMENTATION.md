@@ -606,3 +606,5 @@ REQUEST BODY CATEGORIES SUMMARY
 - All endpoints except /auth/login and /core/health
 - Admin-only endpoints marked in Admin sections
 - Student-only access to own data in Student sections
+
+POST /api/v1/student/{student_id}/chat-sessions/sync
