@@ -43,6 +43,14 @@ if _root_dir not in sys.path:
 
 logger = logging.getLogger(__name__)
 
+# Import ConversationManager and StudentManager for persistence
+try:
+    from studentProfileDetails.dbutils import ConversationManager, StudentManager
+    HAS_CONVERSATION_MANAGER = True
+except ImportError:
+    HAS_CONVERSATION_MANAGER = False
+    logger.warning("ConversationManager not available, chat persistence disabled")
+
 # Pydantic models for request/response
 if HAS_FASTAPI:
     class CreateSessionRequest(BaseModel):
@@ -64,6 +72,7 @@ if HAS_FASTAPI:
         chunks_referenced: List[str] = Field(default_factory=list)
         retrieval_info: Dict[str, Any] = Field(default_factory=dict)
         session_id: str = Field(..., description="Session identifier")
+        conversation_id: Optional[str] = Field(default=None, description="Database conversation ID")
         safety_flag: Optional[bool] = Field(default=False)
         
     class SessionResponse(BaseModel):
@@ -347,6 +356,7 @@ if HAS_FASTAPI:
         1. Retrieve relevant context from pre-loaded topic
         2. Enforce strict topic constraints
         3. Generate response using ONLY the provided context
+        4. Save conversation to database for persistence
         """
         try:
             result = await agent.chat(
@@ -360,12 +370,83 @@ if HAS_FASTAPI:
                     raise HTTPException(status_code=404, detail=result['error'])
                 raise HTTPException(status_code=400, detail=result['error'])
             
+            # Save conversation to database if persistence is available
+            if HAS_CONVERSATION_MANAGER:
+                try:
+                    # Get session info to extract metadata
+                    session_status = await agent.get_session_status(session_id)
+                    
+                    if not session_status.get('error'):
+                        student_id = session_status.get('student_id', '')
+                        subject = session_status.get('subject', 'Topic Chat')
+                        class_name = session_status.get('class_name', '')
+                        
+                        # Get student's subject_agent_id from their profile
+                        subject_agent_id = None
+                        try:
+                            student_manager = StudentManager()
+                            student = student_manager.get_student(student_id)
+                            logger.info(f"🔍 Student lookup: {student_id}, found: {student is not None}")
+                            if student:
+                                logger.info(f"🔍 Student keys: {list(student.keys())}")
+                                logger.info(f"🔍 Session subject: '{subject}' (type: {type(subject)})")
+                                # Check for subject_agent in student_details or at root level
+                                student_details = student.get('student_details', {})
+                                subject_agent_data = student_details.get('subject_agent') or student.get('subject_agent') or student.get('subject_agents')
+                                logger.info(f"🔍 Subject agent data: {subject_agent_data}")
+                                # Also check for direct subject_agent_id at root or in chat_sessions
+                                if not subject_agent_data:
+                                    chat_sessions = student.get('chat_sessions', {})
+                                    subject_agent_id = chat_sessions.get('subject_agent_id') or student.get('subject_agent_id')
+                                if subject_agent_data:
+                                    for sa in subject_agent_data:
+                                        sa_subject = sa.get('subject', '').lower().strip()
+                                        session_subject = subject.lower().strip() if subject else ''
+                                        logger.info(f"🔍 Comparing: '{sa_subject}' == '{session_subject}'")
+                                        if sa_subject == session_subject:
+                                            subject_agent_id = sa.get('subject_agent_id')
+                                            logger.info(f"✅ Found subject_agent_id: {subject_agent_id}")
+                                            break
+                                    if not subject_agent_id:
+                                        logger.warning(f"⚠️ No matching subject found for '{subject}'")
+                                else:
+                                    logger.warning(f"⚠️ No subject_agent data for student {student_id}")
+                            else:
+                                logger.warning(f"⚠️ Student not found: {student_id}")
+                        except Exception as e:
+                            logger.warning(f"❌ Could not fetch subject_agent_id: {e}", exc_info=True)
+                        
+                        # Initialize conversation manager and save
+                        conversation_manager = ConversationManager()
+                        conversation_id = conversation_manager.add_conversation(
+                            student_id=student_id,
+                            subject=subject,
+                            query=request.query,
+                            response=result['response'],
+                            chat_session_id=session_id,
+                            agent_id=subject_agent_id if subject_agent_id else (f"topic_{class_name}_{subject}" if class_name and subject else "topic_chat"),
+                            additional_data={
+                                "topic_id": session_status.get('topic', {}).get('topic_id', ''),
+                                "topic_name": session_status.get('topic', {}).get('topic_name', ''),
+                                "class_name": class_name,
+                                "context_used": result.get('context_used', False),
+                                "chunks_referenced": result.get('chunks_referenced', [])
+                            }
+                        )
+                        logger.info(f"Conversation saved for session {session_id}, student {student_id}, agent {subject_agent_id}, conversation_id: {conversation_id}")
+                        # Store conversation_id for response
+                        result['conversation_id'] = conversation_id
+                except Exception as e:
+                    # Log error but don't fail the chat response
+                    logger.error(f"Failed to save conversation: {e}")
+            
             return ChatResponse(
                 response=result['response'],
                 context_used=result.get('context_used', False),
                 chunks_referenced=result.get('chunks_referenced', []),
                 retrieval_info=result.get('retrieval_info', {}),
                 session_id=result['session_id'],
+                conversation_id=result.get('conversation_id'),
                 safety_flag=result.get('safety_flag', False)
             )
             

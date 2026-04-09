@@ -366,7 +366,7 @@ class TopicRestrictedChatAgent:
         try:
             # Import from Teacher_AI_Agent
             sys.path.insert(0, os.path.join(_root_dir, 'Teacher_AI_Agent'))
-            from search.structured_response import generate_response_from_groq
+            from Teacher_AI_Agent.search.structured_response import generate_response_from_groq
             
             # Call the existing LLM function
             response = generate_response_from_groq(

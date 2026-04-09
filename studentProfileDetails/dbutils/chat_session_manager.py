@@ -529,3 +529,126 @@ class ChatSessionManager:
         )
         
         return doc is not None and chat_session_id in doc.get("chat_sessions", {})
+    
+    def sync_chat_sessions_from_history(self, student_id: str) -> Dict[str, Any]:
+        """
+        Sync chat_sessions from conversation_history.
+        Creates/updates chat_sessions entries based on conversations with chat_session_id.
+        Also stores last two messages (query and response) for each session.
+        
+        Args:
+            student_id: Student identifier
+            
+        Returns:
+            Dict with sync results
+        """
+        # Fetch student document with conversation_history
+        doc = self.students.find_one(
+            {"student_id": student_id},
+            {"conversation_history": 1, "chat_sessions": 1}
+        )
+        
+        if not doc:
+            return {"synced": 0, "created": 0, "updated": 0, "error": "Student not found"}
+        
+        conversation_history = doc.get("conversation_history", {})
+        existing_chat_sessions = doc.get("chat_sessions", {})
+        
+        # Group conversations by chat_session_id
+        sessions_data = {}
+        
+        for subject, history in conversation_history.items():
+            for convo in history:
+                chat_session_id = convo.get("chat_session_id")
+                if not chat_session_id:
+                    continue
+                
+                if chat_session_id not in sessions_data:
+                    sessions_data[chat_session_id] = {
+                        "conversations": [],
+                        "subject": subject,
+                        "agent_id": convo.get("agent_id"),
+                        "topic_name": convo.get("topic_name")
+                    }
+                
+                sessions_data[chat_session_id]["conversations"].append(convo)
+        
+        synced_count = 0
+        created_count = 0
+        updated_count = 0
+        
+        for chat_session_id, data in sessions_data.items():
+            # Sort conversations by timestamp
+            conversations = sorted(
+                data["conversations"],
+                key=lambda x: x.get("timestamp", datetime.min),
+                reverse=True
+            )
+            
+            if not conversations:
+                continue
+            
+            # Get the most recent conversation for session info
+            latest = conversations[0]
+            
+            # Get last two messages (if available)
+            last_messages = []
+            for conv in conversations[:2]:
+                last_messages.append({
+                    "query": conv.get("query", ""),
+                    "response": conv.get("response", "")[:200],
+                    "timestamp": conv.get("timestamp").isoformat() if conv.get("timestamp") else None
+                })
+            
+            # Prepare session data
+            session_data = {
+                "title": data.get("topic_name") or f"New {data['subject']} Chat",
+                "subject": data["subject"],
+                "agent_type": "subject" if data.get("agent_id") else "general",
+                "agent_name": data["subject"],
+                "agent_id": data.get("agent_id"),
+                "message_count": len(conversations),
+                "last_query": latest.get("query", ""),
+                "last_response": latest.get("response", "")[:200],
+                "last_messages": last_messages,
+                "updated_at": latest.get("timestamp", datetime.utcnow())
+            }
+            
+            # Create or update chat session
+            if chat_session_id in existing_chat_sessions:
+                # Update existing
+                result = self.students.update_one(
+                    {"student_id": student_id},
+                    {
+                        "$set": {
+                            f"chat_sessions.{chat_session_id}.{k}": v
+                            for k, v in session_data.items()
+                        }
+                    }
+                )
+                if result.modified_count > 0:
+                    updated_count += 1
+            else:
+                # Create new chat session
+                session_data["created_at"] = conversations[-1].get("timestamp", datetime.utcnow())
+                session_data["chat_session_id"] = chat_session_id
+                
+                result = self.students.update_one(
+                    {"student_id": student_id},
+                    {
+                        "$set": {
+                            f"chat_sessions.{chat_session_id}": session_data
+                        }
+                    }
+                )
+                if result.modified_count > 0:
+                    created_count += 1
+            
+            synced_count += 1
+        
+        return {
+            "synced": synced_count,
+            "created": created_count,
+            "updated": updated_count,
+            "student_id": student_id
+        }

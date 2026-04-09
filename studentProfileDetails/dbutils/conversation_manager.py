@@ -487,13 +487,15 @@ class ConversationManager:
                 "_id": str(conv["_id"]),
                 "chat_session_id": conv.get("chat_session_id"),
                 "subject": conv.get("subject"),
+                # "topic_id": conv.get("topic_id"),
+                "topic_name": conv.get("topic_name"),
                 "query": conv.get("query", ""),
                 "response": conv.get("response", ""),
                 "feedback": conv.get("feedback", "neutral"),
                 # "confusion_type": conv.get("confusion_type", "NO_CONFUSION"),
                 "timestamp": conv["timestamp"].isoformat() if conv.get("timestamp") else None,
                 # "evaluation": conv.get("evaluation", {}),
-                "agent_id": conv.get("subject_agent_id")
+                "agent_id": conv.get("agent_id")
             }
             for conv in session_conversations
         ]
