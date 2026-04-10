@@ -218,6 +218,9 @@ class TopicContextLoader:
                 self._memory_cache[cache_key] = full_chunks
                 logger.info(f"Full chunks cached in memory: {cache_key}")
             
+            # Calculate topic centroid for semantic similarity checks
+            topic_centroid = self._calculate_topic_centroid(metadata_index)
+            
             # Calculate statistics
             sources = list(set(m['source_file'] for m in metadata_index if m['source_file']))
             stats = {
@@ -234,7 +237,8 @@ class TopicContextLoader:
                 "metadata_index": metadata_index,
                 "cache_key": cache_key,
                 "stats": stats,
-                "full_chunks": full_chunks  # Return full chunks for session storage
+                "full_chunks": full_chunks,  # Return full chunks for session storage
+                "topic_centroid": topic_centroid  # Pre-calculated for efficiency
             }
             
         except Exception as e:
@@ -269,6 +273,34 @@ class TopicContextLoader:
         except Exception as e:
             logger.error(f"Error retrieving full chunks: {e}")
             return {}
+    
+    def _calculate_topic_centroid(self, metadata_index: List[Dict]) -> Optional[List[float]]:
+        """
+        Calculate the centroid (average) embedding vector for the topic.
+        Used for semantic similarity checks.
+        """
+        try:
+            embeddings = [m['embedding'] for m in metadata_index if m.get('embedding')]
+            if not embeddings:
+                logger.warning("No embeddings found in metadata, cannot calculate centroid")
+                return None
+            
+            # Try numpy first
+            try:
+                import numpy as np
+                centroid = np.mean(embeddings, axis=0).tolist()
+                logger.info(f"Calculated topic centroid from {len(embeddings)} embeddings")
+                return centroid
+            except ImportError:
+                # Fallback: manual averaging
+                dim = len(embeddings[0])
+                centroid = [sum(e[i] for e in embeddings) / len(embeddings) for i in range(dim)]
+                logger.info(f"Calculated topic centroid (manual) from {len(embeddings)} embeddings")
+                return centroid
+                
+        except Exception as e:
+            logger.error(f"Error calculating topic centroid: {e}")
+            return None
     
     def close(self):
         """Close database connections."""

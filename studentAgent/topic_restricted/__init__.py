@@ -9,13 +9,14 @@ from .topic_context_loader import TopicContextLoader
 from .selective_retriever import SelectiveContextRetriever
 from .constraint_engine import StrictConstraintEngine
 from .topic_restricted_chat_agent import TopicRestrictedChatAgent
-from .jailbreak_detector import JailbreakDetector
+from .jailbreak_detector import TopicBoundaryDetector, JailbreakDetector
 
 __all__ = [
     "TopicSessionManager",
-    "TopicContextLoader", 
+    "TopicContextLoader",
     "SelectiveContextRetriever",
     "StrictConstraintEngine",
     "TopicRestrictedChatAgent",
-    "JailbreakDetector",
+    "TopicBoundaryDetector",
+    "JailbreakDetector",  # Alias for backward compatibility
 ]

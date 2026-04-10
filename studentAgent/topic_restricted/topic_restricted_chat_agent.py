@@ -40,7 +40,9 @@ class TopicRestrictedChatAgent:
         llm_gateway=None,
         jailbreak_detector=None,
         max_context_chunks: int = 5,
-        similarity_threshold: float = 0.3
+        similarity_threshold: float = 0.3,
+        use_full_context: bool = True,
+        max_context_tokens: int = 6000
     ):
         self.session_manager = session_manager
         self.retriever = retriever
@@ -48,6 +50,9 @@ class TopicRestrictedChatAgent:
         self.jailbreak_detector = jailbreak_detector
         self.max_context_chunks = max_context_chunks
         self.similarity_threshold = similarity_threshold
+        self.use_full_context = use_full_context
+        self.max_context_tokens = max_context_tokens
+        self._embedding_model = None
         self._initialized = False
     
     async def initialize(
@@ -99,7 +104,16 @@ class TopicRestrictedChatAgent:
             
             # Initialize jailbreak detector if not provided
             if self.jailbreak_detector is None:
-                self.jailbreak_detector = JailbreakDetector(strict_mode=True)
+                from .jailbreak_detector import TopicBoundaryDetector
+                self.jailbreak_detector = TopicBoundaryDetector(
+                    strict_mode=True,
+                    embedding_model=embedding_model,
+                    similarity_threshold=0.25,
+                    topic_centroid_similarity_threshold=0.20
+                )
+            
+            # Store embedding model reference
+            self._embedding_model = embedding_model
             
             self._initialized = True
             logger.info("TopicRestrictedChatAgent initialized successfully")
@@ -178,8 +192,41 @@ class TopicRestrictedChatAgent:
                 "session_id": session_id
             }
         
-        # Step 2: Safety check
-        if self.jailbreak_detector:
+        # Step 2: Semantic topic boundary check (replaces regex-based jailbreak detection)
+        topic_metadata = session.get('topic_metadata', [])
+        topic_name = session['topic'].get('topic_name', 'this topic')
+        
+        if self.jailbreak_detector and hasattr(self.jailbreak_detector, 'check_topic_boundary'):
+            is_on_topic, confidence, reason, details = await self.jailbreak_detector.check_topic_boundary(
+                query=query,
+                topic_metadata=topic_metadata,
+                topic_name=topic_name
+            )
+            
+            if not is_on_topic:
+                logger.warning(f"Off-topic query detected: {reason} (confidence: {confidence:.2f})")
+                off_topic_msg = (
+                    f"I can only answer questions about {topic_name} "
+                    f"based on your study materials. This question appears to be outside "
+                    f"the scope of the current topic. Please ask a question related to {topic_name}."
+                )
+                await self.session_manager.update_session(
+                    session_id=session_id,
+                    user_message={"content": query},
+                    assistant_message={"content": off_topic_msg},
+                    selected_chunks=[]
+                )
+                return {
+                    "response": off_topic_msg,
+                    "context_used": False,
+                    "off_topic": True,
+                    "session_id": session_id,
+                    "safety_flag": False,
+                    "topic_confidence": confidence,
+                    "topic_check_details": details
+                }
+        else:
+            # Fallback to legacy jailbreak detection
             is_jailbreak, reason, details = self.jailbreak_detector.detect(query)
             if is_jailbreak:
                 logger.warning(f"Jailbreak attempt detected: {reason}")
@@ -192,14 +239,14 @@ class TopicRestrictedChatAgent:
                 }
         
         try:
-            # Step 3: Retrieve relevant context
+            # Step 3: Retrieve relevant context (use full context mode if enabled)
             context_string, selected_chunks, retrieval_info = await self.retriever.retrieve_context(
                 query=query,
                 session_state=session,
-                top_k=self.max_context_chunks
+                top_k=self.max_context_chunks,
+                use_all_chunks=self.use_full_context,
+                respect_token_budget=True
             )
-            
-            topic_name = session['topic'].get('topic_name', 'this topic')
             
             # Check if context retrieval failed
             if retrieval_info.get('status') == 'embedding_failed':
@@ -212,37 +259,10 @@ class TopicRestrictedChatAgent:
                 )
                 return {"response": error_msg, "context_used": False, "off_topic": True, "session_id": session_id}
             
-            # Step 3b: Validate context relevance with keyword check
-            query_lower = query.lower()
-            topic_keywords = self._extract_topic_keywords(topic_name)
-            
-            # Check if query contains topic keywords
-            query_has_topic_words = any(kw in query_lower for kw in topic_keywords)
-            
-            # Check if retrieved chunks contain topic keywords
-            chunks_have_topic_words = False
-            if context_string:
-                context_lower = context_string.lower()
-                chunks_have_topic_words = any(kw in context_lower for kw in topic_keywords)
-            
-            # Reject if neither query nor context have topic keywords
-            if not query_has_topic_words and not chunks_have_topic_words:
-                logger.warning(f"Query and context don't match topic '{topic_name}'")
-                off_topic_msg = (
-                    f"I can only answer questions about {topic_name} "
-                    f"based on your study materials. This question appears to be outside "
-                    f"the scope of the current topic. Please ask a question related to {topic_name}."
-                )
-                await self.session_manager.update_session(
-                    session_id=session_id,
-                    user_message={"content": query},
-                    assistant_message={"content": off_topic_msg},
-                    selected_chunks=[]
-                )
-                return {"response": off_topic_msg, "context_used": False, "off_topic": True, "session_id": session_id}
-            
-            # Check similarity threshold (stricter now - 0.5 instead of 0.3)
-            if retrieval_info.get('status') == 'no_relevant_chunks' or retrieval_info.get('highest_score', 0) < 0.5:
+            # Step 3b: Check semantic relevance (replaces keyword-based validation)
+            if retrieval_info.get('status') == 'no_relevant_chunks':
+                # Even with full context, if no chunks passed similarity threshold, query may be off-topic
+                logger.warning(f"No relevant chunks found for query in topic '{topic_name}'")
                 off_topic_msg = (
                     f"I can only answer questions about {topic_name} "
                     f"based on your study materials. This question appears to be outside "
@@ -301,7 +321,7 @@ class TopicRestrictedChatAgent:
                 selected_chunks=selected_chunks
             )
             
-            return {
+            response_data = {
                 "response": llm_response,
                 "context_used": True,
                 "chunks_referenced": selected_chunks,
@@ -309,6 +329,13 @@ class TopicRestrictedChatAgent:
                 "validation_info": validation_info,
                 "session_id": session_id
             }
+            
+            # Include full context mode info if applicable
+            if self.use_full_context:
+                response_data["full_context_mode"] = True
+                response_data["token_budget"] = retrieval_info.get("token_budget_used")
+            
+            return response_data
             
         except Exception as e:
             logger.error(f"Error processing chat: {e}", exc_info=True)

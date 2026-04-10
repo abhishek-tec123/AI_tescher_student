@@ -32,20 +32,26 @@ class SelectiveContextRetriever:
         embedding_model=None,
         default_top_k: int = 5,
         similarity_threshold: float = 0.3,
-        use_memory_fallback: bool = True
+        use_memory_fallback: bool = True,
+        max_context_tokens: int = 6000,
+        tokens_per_chunk_estimate: int = 150
     ):
         self.redis = redis_client
         self.embedding_model = embedding_model
         self.default_top_k = default_top_k
         self.similarity_threshold = similarity_threshold
         self.use_memory_fallback = use_memory_fallback
+        self.max_context_tokens = max_context_tokens
+        self.tokens_per_chunk_estimate = tokens_per_chunk_estimate
         self._embedding_cache: Dict[str, List[float]] = {}
     
     async def retrieve_context(
         self,
         query: str,
         session_state: Dict[str, Any],
-        top_k: Optional[int] = None
+        top_k: Optional[int] = None,
+        use_all_chunks: bool = False,
+        respect_token_budget: bool = True
     ) -> Tuple[str, List[str], Dict[str, Any]]:
         """
         Retrieve relevant context for a query from pre-loaded topic.
@@ -54,12 +60,18 @@ class SelectiveContextRetriever:
             query: Student's question
             session_state: Current session with topic_metadata
             top_k: Number of chunks to retrieve (default: self.default_top_k)
+            use_all_chunks: If True, return all chunks sorted by relevance (respecting token_budget)
+            respect_token_budget: If True and use_all_chunks, limit by max_context_tokens
             
         Returns:
             (context_string, selected_chunk_ids, retrieval_info)
         """
         k = top_k or self.default_top_k
         metadata_index = session_state.get('topic_metadata', [])
+        
+        # If use_all_chunks is True, set k to all chunks
+        if use_all_chunks:
+            k = len(metadata_index)
         
         if not metadata_index:
             logger.warning("No metadata index in session state")
@@ -116,11 +128,21 @@ class SelectiveContextRetriever:
                     }
                 )
             
-            # Step 5: Select top-K
-            selected = filtered_chunks[:k]
-            selected_ids = [c['chunk_id'] for c in selected]
-            
-            logger.info(f"Selected {len(selected_ids)} chunks with scores: {[c['score'] for c in selected]}")
+            # Step 5: Select chunks
+            if use_all_chunks and respect_token_budget:
+                # Select all chunks that fit within token budget, sorted by relevance
+                selected, excluded_count = self._select_chunks_within_budget(
+                    filtered_chunks, self.max_context_tokens
+                )
+                selected_ids = [c['chunk_id'] for c in selected]
+                logger.info(
+                    f"Selected {len(selected_ids)} chunks within {self.max_context_tokens} token budget, "
+                    f"excluded {excluded_count} chunks"
+                )
+            else:
+                selected = filtered_chunks[:k]
+                selected_ids = [c['chunk_id'] for c in selected]
+                logger.info(f"Selected {len(selected_ids)} chunks with scores: {[c['score'] for c in selected]}")
             
             # Step 6: Fetch full content from cache
             full_chunks = await self._get_full_chunks(
@@ -132,14 +154,18 @@ class SelectiveContextRetriever:
             # Step 7: Build context string
             context_string = self._build_context_string(selected_ids, full_chunks)
             
+            total_tokens = sum(c.get('token_count', 0) for c in selected)
+            
             retrieval_info = {
                 "status": "success",
                 "chunks_selected": len(selected_ids),
                 "chunk_ids": selected_ids,
                 "scores": {c['chunk_id']: round(c['score'], 4) for c in selected},
-                "total_tokens": sum(c.get('token_count', 0) for c in selected),
+                "total_tokens": total_tokens,
                 "threshold": self.similarity_threshold,
-                "highest_score": selected[0]['score'] if selected else 0
+                "highest_score": selected[0]['score'] if selected else 0,
+                "use_all_chunks": use_all_chunks,
+                "token_budget_used": f"{total_tokens}/{self.max_context_tokens}" if use_all_chunks else None
             }
             
             return context_string, selected_ids, retrieval_info
@@ -323,6 +349,46 @@ class SelectiveContextRetriever:
             )
         
         return "\n---\n".join(context_parts) if context_parts else ""
+    
+    def _select_chunks_within_budget(
+        self,
+        scored_chunks: List[Dict[str, Any]],
+        max_tokens: int
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """
+        Select chunks that fit within token budget, prioritizing by relevance score.
+        
+        Args:
+            scored_chunks: List of chunks sorted by score (highest first)
+            max_tokens: Maximum tokens allowed
+            
+        Returns:
+            (selected_chunks, excluded_count)
+        """
+        selected = []
+        current_tokens = 0
+        
+        for chunk in scored_chunks:
+            chunk_tokens = chunk.get('token_count', self.tokens_per_chunk_estimate)
+            
+            # Check if adding this chunk would exceed budget
+            if current_tokens + chunk_tokens > max_tokens and selected:
+                # We've already selected some chunks and this one would exceed budget
+                break
+            
+            selected.append(chunk)
+            current_tokens += chunk_tokens
+            
+            # Safety check: if single chunk exceeds budget, still include it but log warning
+            if current_tokens > max_tokens and len(selected) == 1:
+                logger.warning(
+                    f"Single chunk {chunk['chunk_id']} exceeds token budget "
+                    f"({chunk_tokens} > {max_tokens})"
+                )
+        
+        excluded_count = len(scored_chunks) - len(selected)
+        
+        return selected, excluded_count
     
     def clear_embedding_cache(self):
         """Clear the embedding cache."""
