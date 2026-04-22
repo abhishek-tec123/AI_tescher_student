@@ -21,6 +21,7 @@ class AskRequest(BaseModel):
     class_name: str
     query: str
     chat_session_id: Optional[str] = None
+    language: Optional[str] = None  # "auto", "english", "hindi", "hinglish" - auto-detects if not provided
 
 class ChatHistoryItem(BaseModel):
     student_id: str

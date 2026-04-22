@@ -214,7 +214,8 @@ def build_teacher_prompt(
     session_context: str,
     current_query: str = "Current Question",
     agent_metadata: dict = None,
-    base_prompt: str = None
+    base_prompt: str = None,
+    language: str = "english"
 ) -> str:
     """
     Build complete teacher prompt with all components.
@@ -228,10 +229,12 @@ def build_teacher_prompt(
         current_query: Current student question
         agent_metadata: Agent metadata for introductions and global settings (optional)
         base_prompt: Custom base prompt (optional, defaults to BASE_TEACHER_PROMPT)
+        language: Response language - "english", "hindi", or "hinglish"
     
     Returns:
         Complete teacher prompt string
     """
+    from studentProfileDetails.language_detector import get_language_instruction
     
     # Use provided base prompt or default
     if base_prompt is None:
@@ -276,6 +279,9 @@ Example: "Hello! I'm {agent_name}. {description}"
             # If global_prompts module is not available, skip
             pass
 
+    # Get language instruction
+    language_instruction = get_language_instruction(language)
+    
     # Build the prompt with global prompt if available
     prompt = f"""
 {base_prompt}
@@ -283,6 +289,8 @@ Example: "Hello! I'm {agent_name}. {description}"
 {global_prompt_content}
 
 {agent_introduction}
+{language_instruction}
+
 You are an expert and supportive school teacher.
 
 CLASS: {class_name}

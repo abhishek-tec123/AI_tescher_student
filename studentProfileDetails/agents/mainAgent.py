@@ -35,9 +35,9 @@ import time
 _RESPONSE_CACHE = {}
 _RESPONSE_LOCK = Lock()
 
-def _get_response_cache_key(query: str, subject: str, profile_hash: str) -> str:
+def _get_response_cache_key(query: str, subject: str, profile_hash: str, language: str = "english") -> str:
     """Generate cache key for response caching."""
-    content = f"{query}_{subject}_{profile_hash}"
+    content = f"{query}_{subject}_{profile_hash}_{language}"
     return hashlib.md5(content.encode()).hexdigest()
 
 def _get_profile_hash(profile: dict) -> str:
@@ -50,27 +50,27 @@ def _get_profile_hash(profile: dict) -> str:
     }
     return hashlib.md5(str(relevant_fields).encode()).hexdigest()[:16]
 
-def get_cached_response(query: str, subject: str, profile: dict) -> str:
+def get_cached_response(query: str, subject: str, profile: dict, language: str = "english") -> str:
     """Get cached response if available and not expired."""
     profile_hash = _get_profile_hash(profile)
-    cache_key = _get_response_cache_key(query, subject, profile_hash)
+    cache_key = _get_response_cache_key(query, subject, profile_hash, language)
     
     with _RESPONSE_LOCK:
         if cache_key in _RESPONSE_CACHE:
             cached_data, timestamp = _RESPONSE_CACHE[cache_key]
             # Cache for 5 minutes (300 seconds)
             if time.time() - timestamp < 300:
-                print(f"📂 Using cached response for query: {query[:30]}...")
+                print(f"📂 Using cached response for query: {query[:30]}... (lang: {language})")
                 return cached_data
             else:
                 # Remove expired entry
                 del _RESPONSE_CACHE[cache_key]
     return None
 
-def cache_response(query: str, subject: str, profile: dict, response: str):
+def cache_response(query: str, subject: str, profile: dict, response: str, language: str = "english"):
     """Cache a response for future use."""
     profile_hash = _get_profile_hash(profile)
-    cache_key = _get_response_cache_key(query, subject, profile_hash)
+    cache_key = _get_response_cache_key(query, subject, profile_hash, language)
     
     with _RESPONSE_LOCK:
         _RESPONSE_CACHE[cache_key] = (response, time.time())
@@ -79,7 +79,7 @@ def cache_response(query: str, subject: str, profile: dict, response: str):
             # Remove oldest entry (simple FIFO)
             oldest_key = min(_RESPONSE_CACHE.keys(), key=lambda k: _RESPONSE_CACHE[k][1])
             del _RESPONSE_CACHE[oldest_key]
-        print(f"💾 Cached response for query: {query[:30]}...")
+        print(f"💾 Cached response for query: {query[:30]}... (lang: {language})")
 
 
 # =====================================================
@@ -213,16 +213,43 @@ def diagnosis_chat(
     subject,
     student_profile,
     context=None,
-    subject_agent_id=None
+    subject_agent_id=None,
+    language=None
 ):
     """
     Preference-aware, session-aware teacher response
+    
+    Args:
+        language: Response language ('english', 'hindi', 'hinglish' or None for auto-detect)
     """
+    from studentProfileDetails.language_detector import detect_language
+    
+    # -----------------------------
+    # 🌐 LANGUAGE DETECTION
+    # -----------------------------
+    if language is None or language == "auto":
+        # Get preferred language from profile
+        preferred_language = student_profile.get("preferred_language", "auto")
+        
+        if preferred_language == "auto":
+            # Auto-detect from query
+            detected_language = detect_language(query, use_llm_fallback=True)
+            print(f"🌐 Auto-detected language: {detected_language}")
+        else:
+            # Use student's preferred language
+            detected_language = preferred_language
+            print(f"🌐 Using preferred language: {detected_language}")
+    else:
+        detected_language = language
+        print(f"🌐 Using explicit language: {detected_language}")
+    
+    # Store detected language in profile for continuity
+    student_profile["last_detected_language"] = detected_language
 
     # -----------------------------
     # 🚀 RESPONSE CACHE: Check for cached response first
     # -----------------------------
-    cached_response = get_cached_response(query, subject, student_profile)
+    cached_response = get_cached_response(query, subject, student_profile, language=detected_language)
     if cached_response:
         return {
             "response": cached_response,
@@ -233,9 +260,11 @@ def diagnosis_chat(
                 "top_k": 10,
                 "cache_hit": True
             },
+            "detected_language": detected_language,  # Include detected language
             "debug_info": {
                 "cache_hit": True,
-                "response_time": "cached"
+                "response_time": "cached",
+                "language": detected_language
             }
         }
 
@@ -347,7 +376,8 @@ def diagnosis_chat(
         session_context=full_context,
         current_query=query,
         agent_metadata=agent_metadata,
-        base_prompt=get_base_prompt()  # Use the cached base prompt
+        base_prompt=get_base_prompt(),  # Use the cached base prompt
+        language=detected_language  # Pass detected language
     )
 
     full_prompt += f"\nOriginal Student Question:\n{query}\n"
@@ -384,7 +414,7 @@ def diagnosis_chat(
     # -----------------------------
     # 🚀 CACHE RESPONSE for future speed
     # -----------------------------
-    cache_response(query, subject, student_profile, response)
+    cache_response(query, subject, student_profile, response, language=detected_language)
 
     return {
         "response": response,
@@ -392,6 +422,7 @@ def diagnosis_chat(
         "profile": student_profile,
         "quality_scores": quality_scores,
         "rl_metadata": rl_metadata,
+        "detected_language": detected_language,  # Include detected language in response
         "debug_info": {
             "actual_prompt": full_prompt,
             "prompt_length": len(full_prompt),
@@ -404,7 +435,8 @@ def diagnosis_chat(
                 confusion_type=confusion_type,
                 session_context=full_context,
                 current_query=query,
-                agent_metadata=agent_metadata
+                agent_metadata=agent_metadata,
+                language=detected_language  # Include language in debug base_prompt
             ).replace(f"\n\n--- GLOBAL RAG CONTEXT ---\n{global_rag_settings.get('content', '')}\n--- END GLOBAL RAG CONTEXT ---\n", "") if global_rag_settings.get("enabled", False) else full_prompt
         }
     }

@@ -31,7 +31,9 @@ DEFAULT_SUBJECT_PREFERENCE = {
     "confusion_counter": {},
     "quiz_score_history": [],
     "consecutive_low_scores": 0,
-    "consecutive_perfect_scores": 0
+    "consecutive_perfect_scores": 0,
+    "preferred_language": "auto",  # "auto", "english", "hindi", "hinglish"
+    "last_detected_language": "english"  # Last detected language for conversation continuity
 }
 
 DEFAULT_CORE_MEMORY = {

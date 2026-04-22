@@ -26,6 +26,21 @@ def handle_chat_intent(
     preference_manager,  # Add preference_manager parameter
     chat_session_id=None,  # Add chat_session_id parameter
 ):
+    # Import language detector
+    from studentProfileDetails.language_detector import detect_language
+    
+    # Detect language from query or use explicit preference
+    explicit_language = getattr(payload, 'language', None)
+    if explicit_language and explicit_language != "auto":
+        detected_language = explicit_language
+        print(f"🌐 Using explicit language from request: {detected_language}")
+    else:
+        # Auto-detect from query
+        detected_language = detect_language(payload.query, use_llm_fallback=True)
+        print(f"🌐 Auto-detected language in handle_chat_intent: {detected_language}")
+    
+    # Store in profile for continuity
+    profile["last_detected_language"] = detected_language
     # -----------------------------------------
     # Greeting
     # -----------------------------------------
@@ -34,7 +49,8 @@ def handle_chat_intent(
             payload=payload,
             student_manager=student_manager,
             profile=profile,
-            chat_session_id=chat_session_id
+            chat_session_id=chat_session_id,
+            language=detected_language
         )
 
     # -----------------------------------------
@@ -46,7 +62,8 @@ def handle_chat_intent(
             student_manager=student_manager,
             profile=profile,
             context=context,
-            chat_session_id=chat_session_id
+            chat_session_id=chat_session_id,
+            language=detected_language
         )
 
     # -----------------------------------------
@@ -68,7 +85,8 @@ def handle_chat_intent(
         payload.subject,
         profile,
         context=history_context,
-        subject_agent_id=subject_agent_id
+        subject_agent_id=subject_agent_id,
+        language=detected_language
     )
 
     response = chat["response"]
@@ -112,6 +130,7 @@ def handle_chat_intent(
         "evaluation": {"status": "processing"},  # Placeholder evaluation
         "conversation_id": conversation_id,  # Now has actual ID
         "context_summary": context_summary,  # Add context summary to response
+        "detected_language": detected_language,  # Include detected language
     }
 
     # -----------------------------------------
@@ -215,6 +234,7 @@ def handle_chat_intent(
                         "tone": updated_profile["tone"],
                         "response_length": updated_profile["response_length"],
                         "include_example": updated_profile["include_example"],
+                        "last_detected_language": detected_language,  # Store detected language
                     },
                 )
                 print("💾 Background profile persistence completed")
