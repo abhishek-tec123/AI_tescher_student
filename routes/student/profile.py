@@ -40,7 +40,10 @@ def get_student_subjects(
     # ------------------------------------------------
     # 1️⃣ Student Assigned Subjects (existing logic)
     # ------------------------------------------------
-    subject_agent = student.get("student_details", {}).get("subject_agent", [])
+    # Try root level first (current schema), fallback to student_details for legacy
+    subject_agent = student.get("subject_agent", [])
+    if not subject_agent:
+        subject_agent = student.get("student_details", {}).get("subject_agent", [])
     student_subjects = []
 
     if isinstance(subject_agent, list):
@@ -48,7 +51,7 @@ def get_student_subjects(
             subject_name = ""
 
             if isinstance(item, dict):
-                subject_name = item.get("subject", "")
+                subject_name = item.get("subject", "") or item.get("name", "")
             elif isinstance(item, str):
                 subject_name = item
 

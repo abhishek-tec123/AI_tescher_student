@@ -25,8 +25,10 @@ def get_student_agent_ids(student_id: str) -> List[str]:
         student_details = student_data.get("student_details", {}) or {}
         student_class = student_details.get("class", "")
 
-        # Get subject_agent from student details
-        subject_agent = student_details.get("subject_agent", "")
+        # Get subject_agent from root level first (current schema), fallback to student_details for legacy
+        subject_agent = student_data.get("subject_agent", "")
+        if not subject_agent:
+            subject_agent = student_details.get("subject_agent", "")
 
         # Helper to extract an agent ID from a dict entry
         def _extract_agent_id(agent_dict: dict) -> Optional[str]:
@@ -40,7 +42,7 @@ def get_student_agent_ids(student_id: str) -> List[str]:
                 return agent_id
 
             # 2) Fallback: resolve by subject name using class agents
-            subject_name = agent_dict.get("subject")
+            subject_name = agent_dict.get("subject") or agent_dict.get("name")
             if subject_name and student_class:
                 try:
                     agents_response = get_all_agents_of_class(student_class)
@@ -48,7 +50,7 @@ def get_student_agent_ids(student_id: str) -> List[str]:
                     agents = agents_response.get("agents") if isinstance(agents_response, dict) else agents_response
                     if isinstance(agents, list):
                         for agent in agents:
-                            if isinstance(agent, dict) and agent.get("subject") == subject_name:
+                            if isinstance(agent, dict) and (agent.get("subject") == subject_name or agent.get("name") == subject_name):
                                 resolved_id = agent.get("subject_agent_id")
                                 if resolved_id:
                                     print(
