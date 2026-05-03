@@ -138,7 +138,7 @@ def get_shared_document_metadata(
                 raise HTTPException(status_code=500, detail="MongoDB URI not configured")
             
             client = MongoClient(mongodb_uri)
-            db = client["teacher_ai"]
+            db = client[os.environ.get("DB_NAME", "tutor_ai")]
             collection = db["shared_knowledge"]
             
             # Find document by doc_unique_id
@@ -181,7 +181,7 @@ def preview_shared_document(
                 raise HTTPException(status_code=500, detail="MongoDB URI not configured")
             
             client = MongoClient(mongodb_uri)
-            db = client["teacher_ai"]
+            db = client[os.environ.get("DB_NAME", "tutor_ai")]
             collection = db["shared_knowledge"]
             
             # Find document by doc_unique_id
@@ -205,7 +205,7 @@ def preview_shared_document(
             from pymongo import MongoClient
             mongodb_uri = os.environ.get("MONGODB_URI")
             client = MongoClient(mongodb_uri)
-            db = client["teacher_ai"]
+            db = client[os.environ.get("DB_NAME", "tutor_ai")]
             collection = db["shared_knowledge"]
             
             doc = collection.find_one({"document.doc_unique_id": document_id})

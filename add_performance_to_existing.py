@@ -79,7 +79,7 @@ def add_performance_to_existing_documents():
         
         # Scan all databases
         for db_name in client.list_database_names():
-            if db_name in ["admin", "local", "config", "teacher_ai"]:
+            if db_name in ["admin", "local", "config", os.environ.get("DB_NAME", "tutor_ai")]:
                 continue
                 
             print(f"\n🗄️ Scanning database: {db_name}")
@@ -179,7 +179,7 @@ def update_specific_agent(agent_id: str = "agent_K3GVB"):
         
         # Scan all databases for this specific agent
         for db_name in client.list_database_names():
-            if db_name in ["admin", "local", "config", "teacher_ai"]:
+            if db_name in ["admin", "local", "config", os.environ.get("DB_NAME", "tutor_ai")]:
                 continue
                 
             print(f"\n🗄️ Scanning database: {db_name}")
@@ -240,7 +240,7 @@ def check_agent_performance(agent_id: str = "agent_K3GVB"):
         
         # Scan all databases
         for db_name in client.list_database_names():
-            if db_name in ["admin", "local", "config", "teacher_ai"]:
+            if db_name in ["admin", "local", "config", os.environ.get("DB_NAME", "tutor_ai")]:
                 continue
                 
             print(f"\n🗄️ Database: {db_name}")

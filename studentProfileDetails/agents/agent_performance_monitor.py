@@ -34,7 +34,7 @@ class AgentPerformanceMonitor:
             retryWrites=True,
             w="majority"
         )
-        self.db = self.client["teacher_ai"]
+        self.db = self.client[os.environ.get("DB_NAME", "tutor_ai")]
         self.students_collection = self.db["students"]
         self.performance_collection = self.db["agent_performance_logs"]
         self.agent_performance_collection = self.db["agent_performance_summary"]
@@ -68,7 +68,7 @@ class AgentPerformanceMonitor:
         try:
             # Get all databases at once
             db_names = [db for db in self.client.list_database_names() 
-                       if db not in ["admin", "local", "config", "teacher_ai"]]
+                       if db not in ["admin", "local", "config", os.environ.get("DB_NAME", "tutor_ai")]]
             
             for db_name in db_names:
                 db = self.client[db_name]
@@ -422,7 +422,7 @@ class AgentPerformanceMonitor:
         try:
             # Search across all databases for the agent
             for db_name in self.client.list_database_names():
-                if db_name in ["admin", "local", "config", "teacher_ai"]:
+                if db_name in ["admin", "local", "config", os.environ.get("DB_NAME", "tutor_ai")]:
                     continue
                     
                 db = self.client[db_name]

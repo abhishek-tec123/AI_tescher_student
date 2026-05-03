@@ -18,7 +18,7 @@ def get_all_agent_performance():
         processed_agent_ids = set()
 
         for db_name in client.list_database_names():
-            if db_name in ["admin", "local", "config", "teacher_ai"]:
+            if db_name in ["admin", "local", "config", os.environ.get("DB_NAME", "tutor_ai")]:
                 continue
 
             db = client[db_name]

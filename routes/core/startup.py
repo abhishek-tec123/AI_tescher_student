@@ -39,6 +39,10 @@ EMBED_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 logger = logging.getLogger("startup")
 
 async def startup_event(app):
+    logger.info("Initializing database on startup...")
+    from init_database import initialize_database
+    initialize_database()
+
     logger.info("Loading embedding model on startup...")
 
     app.state.embedding_model = model_cache.get_embedding_model(

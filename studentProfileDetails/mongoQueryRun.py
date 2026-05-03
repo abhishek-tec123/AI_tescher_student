@@ -1,7 +1,11 @@
+import os
+from dotenv import load_dotenv
 from pymongo import MongoClient
 
-client = MongoClient("mongodb+srv://abhishek1233445:A0t24VdRZzQ0eJSa@cluster0.fgmkf.mongodb.net/")
-db = client["teacher_ai"]
+load_dotenv()
+
+client = MongoClient(os.environ.get("MONGODB_URI"))
+db = client[os.environ.get("DB_NAME", "tutor_ai")]
 
 db.students.update_many(
     {},

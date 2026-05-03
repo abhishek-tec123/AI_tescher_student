@@ -153,7 +153,7 @@ async def _search_shared_documents_async(subject_agent_id: str, query_embedding,
                 return [], []
             
             client = get_async_client()
-            shared_collection = client["teacher_ai"]["shared_knowledge"]
+            shared_collection = client[os.environ.get("DB_NAME", "tutor_ai")]["shared_knowledge"]
             all_shared_results = []
             sources_info = []
             

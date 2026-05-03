@@ -25,7 +25,7 @@ class SharedKnowledgeManager:
             raise ValueError("MONGODB_URI environment variable is not set")
         
         self.client = MongoClient(self.mongodb_uri)
-        self.db = self.client["teacher_ai"]
+        self.db = self.client[os.environ.get("DB_NAME", "tutor_ai")]
         self.collection = self.db["shared_knowledge"]
     
     def upload_shared_document(
@@ -110,7 +110,7 @@ class SharedKnowledgeManager:
         try:
             result = create_vector_and_store_in_atlas(
                 file_inputs=file_inputs,
-                db_name="teacher_ai",
+                db_name=os.environ.get("DB_NAME", "tutor_ai"),
                 collection_name="shared_knowledge",
                 embedding_model=embedding_model,
                 original_filenames=original_filenames,

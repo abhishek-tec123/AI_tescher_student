@@ -16,7 +16,8 @@ MONGODB_URI = os.environ.get("MONGODB_URI")
 if not MONGODB_URI:
     raise ValueError("MONGODB_URI environment variable is not set")
 
-SYSTEM_DBS = {"admin", "local", "config", "teacher_ai"}
+DB_NAME = os.environ.get("DB_NAME", "tutor_ai")
+SYSTEM_DBS = {"admin", "local", "config", DB_NAME}
 
 # ------------------------------------------------------------------------------
 # Single Global MongoDB Client (Thread-safe & Reusable)

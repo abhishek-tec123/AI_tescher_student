@@ -17,7 +17,7 @@ load_dotenv()
 
 # Database Configuration
 MONGO_URI = os.environ.get("MONGODB_URI")
-DB_NAME = "teacher_ai"
+DB_NAME = os.environ.get("DB_NAME", "tutor_ai")
 COLLECTION_NAME = "students"
 
 # Default configurations

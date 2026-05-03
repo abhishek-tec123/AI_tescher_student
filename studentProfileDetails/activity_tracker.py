@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 MONGO_URI = os.environ.get("MONGODB_URI")
-DB_NAME = "teacher_ai"
+DB_NAME = os.environ.get("DB_NAME", "tutor_ai")
 ACTIVITY_COLLECTION = "activity_logs"
 
 class ActivityType(str, Enum):

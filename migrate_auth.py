@@ -19,7 +19,7 @@ from studentProfileDetails.auth.AESPasswordUtils import encrypt_password
 load_dotenv()
 
 MONGO_URI = os.environ.get("MONGODB_URI")
-DB_NAME = "teacher_ai"
+DB_NAME = os.environ.get("DB_NAME", "tutor_ai")
 COLLECTION_NAME = "students"
 
 def migrate_students_to_auth():

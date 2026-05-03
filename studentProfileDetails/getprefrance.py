@@ -1,11 +1,15 @@
+import os
+from dotenv import load_dotenv
 from pymongo import MongoClient
+
+load_dotenv()
 
 
 class subjectPrefrance:
     def __init__(self):
-        self.mongo_uri = "mongodb+srv://abhishek1233445:A0t24VdRZzQ0eJSa@cluster0.fgmkf.mongodb.net/?appName=Cluster0"
+        self.mongo_uri = os.environ.get("MONGODB_URI")
         self.client = MongoClient(self.mongo_uri)
-        self.db = self.client["teacher_ai"]
+        self.db = self.client[os.environ.get("DB_NAME", "tutor_ai")]
         self.students = self.db["students"]
 
     # Get subject preference only

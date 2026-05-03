@@ -79,7 +79,7 @@ def get_dynamic_agent_id_for_subject(student_manager, student_id: str, subject: 
             
             # First prioritize student's class database
             class_databases = [student_class] + [db for db in updater.client.list_database_names() 
-                                             if db not in ["admin", "local", "config", "teacher_ai", student_class]]
+                                             if db not in ["admin", "local", "config", os.environ.get("DB_NAME", "tutor_ai"), student_class]]
             
             for db_name in class_databases:
                 db = updater.client[db_name]

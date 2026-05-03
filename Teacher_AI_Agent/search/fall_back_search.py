@@ -115,7 +115,7 @@ def _fallback_sync_search(
                 enabled_shared_docs = shared_knowledge_manager.get_agent_enabled_documents(subject_agent_id)
                 if enabled_shared_docs:
                     client = get_async_client()
-                    shared_collection = client["teacher_ai"]["shared_knowledge"]
+                    shared_collection = client[os.environ.get("DB_NAME", "tutor_ai")]["shared_knowledge"]
                     
                     for shared_doc in enabled_shared_docs:
                         doc_id = shared_doc["document_id"]

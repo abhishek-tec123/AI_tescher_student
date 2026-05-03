@@ -39,7 +39,7 @@ class VectorPerformanceUpdater:
             target_collection = None
             
             for db_name in self.client.list_database_names():
-                if db_name in ["admin", "local", "config", "teacher_ai"]:
+                if db_name in ["admin", "local", "config", os.environ.get("DB_NAME", "tutor_ai")]:
                     continue
                     
                 db = self.client[db_name]
@@ -313,7 +313,7 @@ class VectorPerformanceUpdater:
             target_collection = None
             
             for db_name in self.client.list_database_names():
-                if db_name in ["admin", "local", "config", "teacher_ai"]:
+                if db_name in ["admin", "local", "config", os.environ.get("DB_NAME", "tutor_ai")]:
                     continue
                     
                 db = self.client[db_name]

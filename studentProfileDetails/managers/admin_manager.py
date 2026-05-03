@@ -9,7 +9,7 @@ from ..auth.password_utils import get_password_hash, verify_password, generate_d
 load_dotenv()
 
 MONGO_URI = os.environ.get("MONGODB_URI")
-DB_NAME = "teacher_ai"
+DB_NAME = os.environ.get("DB_NAME", "tutor_ai")
 ADMINS_COLLECTION = "admins"
 
 class AdminManager:
