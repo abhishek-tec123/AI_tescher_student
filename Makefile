@@ -47,12 +47,12 @@ dev: run
 # Run the FastAPI server
 run: check-uv
 	@echo "🚀 Starting FastAPI server..."
-	@uv run uvicorn app:app --reload --host 0.0.0.0 --port 8000
+	@uv run uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
 
 # Run the FastAPI server (production mode, no reload)
 run-prod: check-uv
 	@echo "🚀 Starting FastAPI server (production mode)..."
-	@uv run uvicorn app:app --host 0.0.0.0 --port 8000 --workers 4
+	@uv run uvicorn src.main:app --host 0.0.0.0 --port 8000 --workers 4
 
 # Run with ngrok (for external access)
 run-server:
@@ -60,7 +60,7 @@ run-server:
 
 # Run the DPO training script
 train-dpo: check-uv
-	@uv run python studentProfileDetails/dpo_trainer.py
+	@uv run python src/student/services/dpo_trainer.py
 
 # Clean up virtual environment and cache
 clean:
