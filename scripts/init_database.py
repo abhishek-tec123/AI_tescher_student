@@ -14,6 +14,9 @@ import sys
 from datetime import datetime
 from pymongo import MongoClient, errors
 from bson import ObjectId
+from dotenv import load_dotenv
+
+load_dotenv()
 
 MONGO_URI = os.environ.get("MONGODB_URI")
 DB_NAME = os.environ.get("DB_NAME", "tutor_ai")
@@ -154,8 +157,7 @@ def initialize_database():
     print("=" * 60)
 
     if not MONGO_URI:
-        print("❌ MONGODB_URI environment variable is not set.")
-        sys.exit(1)
+        raise RuntimeError("MONGODB_URI environment variable is not set.")
 
     print(f"\n🌐 MongoDB URI: {MONGO_URI[:30]}...")
     print(f"🗄️  Database: {DB_NAME}")
@@ -165,8 +167,7 @@ def initialize_database():
         client.server_info()
         print("✅ MongoDB connection successful.")
     except Exception as e:
-        print(f"❌ MongoDB connection failed: {e}")
-        sys.exit(1)
+        raise RuntimeError(f"MongoDB connection failed: {e}")
 
     db = client[DB_NAME]
 
@@ -185,4 +186,8 @@ def initialize_database():
 
 
 if __name__ == "__main__":
-    initialize_database()
+    try:
+        initialize_database()
+    except Exception as e:
+        print(f"❌ {e}")
+        sys.exit(1)

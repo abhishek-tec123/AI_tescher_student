@@ -17,7 +17,17 @@ from config.settings import settings
 
 configure_logging()
 
-app = FastAPI(title=settings.app_name)
+app = FastAPI(
+    title=settings.app_name,
+    description="AI-powered adaptive learning backend. RAG-powered student tutoring with vector search, multi-language support, and performance analytics.",
+    version="0.1.0",
+    contact={
+        "name": "Student Learning API Team",
+    },
+    license_info={
+        "name": "MIT",
+    },
+)
 
 
 class TTSRequest(BaseModel):
